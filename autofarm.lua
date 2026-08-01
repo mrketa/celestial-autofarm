@@ -1,9 +1,3 @@
--- THESIS: One orbit console for two farms; no research controls or generic cheat dashboard.
--- OWN-WORLD: Deep navy glass, moon-cyan and lunar-violet accents, sparse stars, compact workhorse rows.
--- STORY: Pick the current world, start its stable route, and understand the live state at a glance.
--- FIRST VIEWPORT: World controls on the left, live orbit telemetry on the right, no secondary settings.
--- FORM: Celestial operations console translated into INS-ui's Drawing system.
-
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
@@ -293,7 +287,7 @@ local function waitForWorld3Spawn(forceRun, token)
     return false
 end
 
-local function tweenWorld3(target, forceRun, token, dwell, speedOverride)
+local function tweenWorld3(target, forceRun, token, dwell)
     local root = getRoot()
 
     if not root then
@@ -302,10 +296,7 @@ local function tweenWorld3(target, forceRun, token, dwell, speedOverride)
 
     local startPosition = root.Position
     local distance = (target - startPosition).Magnitude
-    local duration = distance / math.max(
-        speedOverride or world3.speed,
-        1
-    )
+    local duration = distance / math.max(world3.speed, 1)
     local startedAt = tick()
 
     while tick() - startedAt < duration do
@@ -510,37 +501,41 @@ local function runWorld3Stage1Cycle(forceRun, token)
 
     local root = getRoot()
     assert(root, "Charakter nicht verfügbar")
-    local test1 = WORLD3_ROUTE[2].position
+    local stage1Entry = WORLD3_ROUTE[2].position
     local cashBefore = cashValue.Value
 
-    world3.status = "Matcha Go-To test1"
-    world3.point = "test1"
-    local atTest1 = false
+    world3.status = "Direkt zu Stage 1"
+    world3.point = "Stage 1 Eingang"
+    local reachedStage1 = false
 
     for attempt = 1, 3 do
         root = getRoot()
         assert(root, "Charakter nicht verfügbar")
 
-        root.CFrame = CFrame.new(test1.X, test1.Y, test1.Z)
+        root.CFrame = CFrame.new(
+            stage1Entry.X,
+            stage1Entry.Y,
+            stage1Entry.Z
+        )
         stopPart(root)
         task.wait(0.08)
 
         root = getRoot()
 
-        if root and (root.Position - test1).Magnitude <= 15 then
-            atTest1 = true
+        if root and (root.Position - stage1Entry).Magnitude <= 15 then
+            reachedStage1 = true
             break
         end
 
         if attempt < 3 then
             world3.status = string.format(
-                "Go-To test1 Retry %d/3",
+                "Stage 1 Versuch %d/3",
                 attempt + 1
             )
         end
     end
 
-    assert(atTest1, "Go-To test1 wurde korrigiert")
+    assert(reachedStage1, "Stage-1-Teleport wurde korrigiert")
 
     local walkTarget = winBlock.Position
     local walkSpeed = 60
@@ -607,7 +602,6 @@ local function runWorld3Stage1Cycle(forceRun, token)
         root = getRoot()
 
         if not root then
-            stopRoot()
             error("Charakter nicht verfügbar")
         end
 
@@ -692,7 +686,7 @@ local function runWorld3WinBlock35Cycle(forceRun, token)
                 end
 
                 world3.status = string.format(
-                    "%s wird erneut angeflogen (%d/3)",
+                    "%s: Versuch %d/3",
                     point.name,
                     attempt + 1
                 )
@@ -703,7 +697,7 @@ local function runWorld3WinBlock35Cycle(forceRun, token)
         assert(moved, point.name .. ": " .. tostring(moveError))
     end
 
-    world3.status = "Validator-Zeitfenster"
+    world3.status = "Wartet auf Reward"
     world3.point = "Win staging"
     stopRoot()
 
@@ -961,7 +955,7 @@ local function waitForBbnoStage2(root, forceRun, token, remote)
             root = currentRoot
             lastPosition = root.Position
             lastMovementAt = tick()
-            bbno.status = "Stage 2 Character wird übernommen"
+            bbno.status = "Stage 2 wird geladen"
         elseif not currentRoot then
             task.wait(POLL_TICK)
         end
@@ -1018,8 +1012,8 @@ local function moveBbnoFinal(root, forceRun, token)
         end
 
         bbno.status = attempt == 1
-            and "Matcha Go-To Final"
-            or string.format("Final Go-To Retry %d/3", attempt)
+            and "Direkt zur Final Stage"
+            or string.format("Final Stage: Versuch %d/3", attempt)
         stopPart(root)
         root.Position = bbnoFinal
         task.wait(0.12)
@@ -1157,7 +1151,7 @@ local function runBbnoCycle(forceRun, token)
         readyAt = math.min(readyAt, sprintDeadline)
     end
 
-    bbno.status = "Plate wird vorbereitet"
+    bbno.status = "Bereit für Reward"
     stopRoot()
 
     while tick() < readyAt do
@@ -1201,7 +1195,7 @@ local function runBbnoCycle(forceRun, token)
     end
 
     if not difference and bbnoMayContinue(forceRun, token) then
-        bbno.status = "Reward Recovery"
+        bbno.status = "Reward wird erneut versucht"
 
         local recovered, recoveryError = moveBbnoFinal(
             root,
@@ -1517,7 +1511,7 @@ end):AddButton("Stop", function()
 end)
 
 world3Control:Info(
-    "Stage 1 läuft zum Safe Start, nutzt Matcha Go-To auf test1 und steuert danach langsam diagonal auf die Mitte von WinBlock32."
+    "Stage 1 läuft zum sicheren Startpunkt, springt zum Eingang und steuert dann diagonal auf WinBlock32."
 )
 
 world3Live:Label(function()
