@@ -32,7 +32,7 @@ pcall(function()
     UI.RemoveTab("Cash Farm")
 end)
 
-local INS_UI_URL = "https://raw.githubusercontent.com/neaxusxgod-png/INS-ui/d244d766e62797dc8562619e65e2f79f4bf9cf08/uilib.min.lua"
+local INS_UI_URL = "https://raw.githubusercontent.com/mrketa/celestial-autofarm/main/celestial_ui.lua"
 local fetched, librarySource = pcall(function()
     if isfile("celestial_ui.lua") then
         return readfile("celestial_ui.lua")
@@ -87,6 +87,11 @@ local function getCash()
     end
 
     return leaderstats:FindFirstChild("Wins")
+end
+
+local function getWorld3Wins()
+    local leaderstats = player:FindFirstChild("leaderstats")
+    return leaderstats and leaderstats:FindFirstChild("Wins")
 end
 
 local function stopPart(root)
@@ -151,22 +156,27 @@ end
 local world3 = {
     auto = false,
     running = false,
-    route = "Stage 1 Event",
+    route = "Stage 1",
     speed = 300,
     status = "Bereit",
     point = "Spawn",
     cycles = 0,
     lastReward = 0,
     lastRewardAt = nil,
-    runToken = 0
+    collectSummerCoins = false,
+    runToken = 0,
+    spawnPosition = nil
 }
+
+local collectWorld3SummerCoins
 
 local summerCoins = {
     auto = false,
     running = false,
     status = "Wartet auf Coins",
     collected = 0,
-    visited = {}
+    visited = {},
+    returnedToSpawn = false
 }
 
 local WORLD3_MINIMUM_TIME = 12.5
@@ -277,6 +287,7 @@ local function waitForWorld3Spawn(forceRun, token)
 
                 if tick() - stableSince >= 0.35 then
                     stopPart(root)
+                    world3.spawnPosition = position
                     return true
                 end
             else
@@ -386,8 +397,8 @@ local function enterWorld3WinPlate(cashValue, cashBefore, forceRun, token)
     local deadline = tick() + 5
     local reached = false
 
-    world3.status = "WinBlock35 wird betreten"
-    world3.point = "WinBlock35"
+    world3.status = "Stage 5 wird betreten"
+    world3.point = "Stage 5"
 
     while tick() < deadline do
         if cashValue.Value ~= cashBefore then
@@ -501,10 +512,10 @@ local function runWorld3Stage1Cycle(forceRun, token)
 
     assert(safe, "Safe Start: " .. tostring(safeError))
 
-    local cashValue = getCash()
+    local cashValue = getWorld3Wins()
     local winBlock = getWorld3Stage1WinBlock()
 
-    assert(cashValue, "Cash-Wert nicht verfügbar")
+    assert(cashValue, "Wins-Wert nicht verfügbar")
     assert(winBlock, "WinBlock32 nicht gefunden")
 
     local root = getRoot()
@@ -594,14 +605,18 @@ local function runWorld3Stage1Cycle(forceRun, token)
 
             Lib:Notify(
                 "World 3 Stage 1",
-                "+" .. formatNumber(reward) .. " Cash",
+                "+" .. formatNumber(reward) .. " Wins",
                 2,
                 "success"
             )
 
-            if not forceRun and not waitForWorld3Reset(false, token) then
-                assert(world3MayContinue(false, token), "Gestoppt")
+            if not waitForWorld3Reset(forceRun, token) then
+                assert(world3MayContinue(forceRun, token), "Gestoppt")
                 error("Spawn-Reset nicht erkannt")
+            end
+
+            if world3.collectSummerCoins then
+                collectWorld3SummerCoins(forceRun, token)
             end
 
             return
@@ -654,9 +669,9 @@ local function runWorld3WinBlock35Cycle(forceRun, token)
         error("Kein stabiler Spawn gefunden")
     end
 
-    local cashValue = getCash()
+    local cashValue = getWorld3Wins()
 
-    assert(cashValue, "Cash-Wert nicht verfügbar")
+    assert(cashValue, "Wins-Wert nicht verfügbar")
 
     local cashBefore = cashValue.Value
     local cycleStartedAt = tick()
@@ -730,18 +745,22 @@ local function runWorld3WinBlock35Cycle(forceRun, token)
     world3.lastReward = reward
     world3.lastRewardAt = tick()
     world3.status = "Reward bestätigt"
-    world3.point = "WinBlock35"
+    world3.point = "Stage 5"
 
     Lib:Notify(
-        "World 3",
-        "+" .. formatNumber(reward) .. " Cash",
+        "World 3 Stage 5",
+        "+" .. formatNumber(reward) .. " Wins",
         2,
         "success"
     )
 
-    if not forceRun and not waitForWorld3Reset(false, token) then
-        assert(world3MayContinue(false, token), "Gestoppt")
+    if not waitForWorld3Reset(forceRun, token) then
+        assert(world3MayContinue(forceRun, token), "Gestoppt")
         error("Spawn-Reset nicht erkannt")
+    end
+
+    if world3.collectSummerCoins then
+        collectWorld3SummerCoins(forceRun, token)
     end
 end
 
@@ -767,7 +786,7 @@ local function runWorld3(forceRun)
     task.spawn(function()
         local ok, failure = pcall(function()
             repeat
-                if world3.route == "Stage 1 Event" then
+                if world3.route == "Stage 1" then
                     runWorld3Stage1Cycle(forceRun, token)
                 else
                     runWorld3WinBlock35Cycle(forceRun, token)
@@ -1455,6 +1474,25 @@ local function findNearestSummerCoin()
     return nearestModel, nearestPart
 end
 
+local function hasActiveSummerCoins()
+    local folder = workspace:FindFirstChild("SummerCoinsLocal")
+
+    if not folder then
+        return false
+    end
+
+    for _, model in ipairs(folder:GetChildren()) do
+        if model:IsA("Model")
+            and model.Name == "SummerCoin"
+            and model:FindFirstChild("Coin", true)
+        then
+            return true
+        end
+    end
+
+    return false
+end
+
 local function collectNearestSummerCoin()
     local model, coin = findNearestSummerCoin()
 
@@ -1470,27 +1508,106 @@ local function collectNearestSummerCoin()
     end
 
     summerCoins.visited[model] = true
+    summerCoins.returnedToSpawn = false
     summerCoins.status = "Sammelt Summer Coin"
     stopPart(root)
     root.Position = coin.Position + Vector3.new(0, 3, 0)
+    task.wait(0.5)
 
-    task.spawn(function()
-        local deadline = tick() + 4
-
-        while model.Parent and tick() < deadline do
-            task.wait(0.1)
-        end
-
-        if not model.Parent then
-            summerCoins.collected = summerCoins.collected + 1
-            summerCoins.status = "Coin eingesammelt"
-        else
-            summerCoins.visited[model] = nil
-            summerCoins.status = "Coin nicht bestätigt"
-        end
-    end)
+    if not model.Parent then
+        summerCoins.collected = summerCoins.collected + 1
+        summerCoins.status = "Coin eingesammelt"
+    else
+        summerCoins.status = "Coin nicht bestätigt"
+        task.spawn(function()
+            task.wait(1.5)
+            if model.Parent then
+                summerCoins.visited[model] = nil
+            end
+        end)
+    end
 
     return true
+end
+
+local function returnToWorld3Spawn()
+    if game.PlaceId ~= WORLD3_PLACE_ID then
+        return false
+    end
+
+    local target = world3.spawnPosition or WORLD3_ROUTE[1].position
+
+    if not target then
+        return false
+    end
+
+    for attempt = 1, 6 do
+        local root = getRoot()
+
+        summerCoins.status = string.format(
+            "Spawn TP %d/6",
+            attempt
+        )
+
+        if root then
+            stopPart(root)
+
+            if attempt % 2 == 0 then
+                root.Position = target
+            else
+                root.CFrame = CFrame.new(target.X, target.Y, target.Z)
+            end
+
+            task.wait(0.25)
+            root = getRoot()
+
+            if root then
+                local position = root.Position
+                local atSpawn = (position - target).Magnitude <= 20
+                    or (position.Y < -120 and position.Z < -900)
+
+                if atSpawn then
+                    stopPart(root)
+                    world3.spawnPosition = position
+                    summerCoins.returnedToSpawn = true
+                    summerCoins.status = "Zurück am Spawn"
+                    return true
+                end
+            end
+        end
+
+        task.wait(0.2)
+    end
+
+    stopRoot()
+    summerCoins.returnedToSpawn = false
+    summerCoins.status = "Spawn TP wurde korrigiert"
+    return false
+end
+
+collectWorld3SummerCoins = function(forceRun, token)
+    summerCoins.status = "Scannt Summer Coins"
+    world3.status = "Scannt Summer Coins"
+    world3.point = "Summer Coins"
+    local deadline = tick() + 20
+
+    while world3MayContinue(forceRun, token)
+        and world3.collectSummerCoins
+        and tick() < deadline
+    do
+        if not collectNearestSummerCoin() then
+            if not hasActiveSummerCoins() then
+                break
+            end
+
+            task.wait(0.1)
+        end
+    end
+
+    assert(world3MayContinue(forceRun, token), "Gestoppt")
+    assert(returnToWorld3Spawn(), "Spawn-Teleport wurde korrigiert")
+    world3.status = "Summer Coins abgeschlossen"
+    world3.point = "Spawn"
 end
 
 local function startSummerCoins()
@@ -1507,10 +1624,20 @@ local function startSummerCoins()
         while generation == _G.CelestialFarmGeneration
             and summerCoins.auto
         do
-            if collectNearestSummerCoin() then
-                task.wait(0.14)
-            else
-                summerCoins.status = "Wartet auf Coins"
+            if not collectNearestSummerCoin() then
+                if hasActiveSummerCoins() then
+                    summerCoins.status = "Wartet auf Coin-Bestätigung"
+                else
+                    if not summerCoins.returnedToSpawn then
+                        if not returnToWorld3Spawn() then
+                            summerCoins.status = "Spawn TP wurde korrigiert"
+                        end
+                    end
+
+                    if summerCoins.returnedToSpawn then
+                        summerCoins.status = "Wartet am Spawn"
+                    end
+                end
                 task.wait(0.1)
             end
         end
@@ -1527,26 +1654,35 @@ end
 
 local window = Lib:CreateWindow({
     title = "CELESTIAL",
-    subtitle = "ORBIT FARM  /  1.0",
-    size = Vector2.new(690, 460),
-    menuKey = "p",
+    subtitle = "",
+    size = Vector2.new(660, 545),
+    menuKey = "delete",
     configName = "orbit",
     configFolder = "celestial_farm",
-    accentA = Color3.fromRGB(124, 225, 242),
-    accentB = Color3.fromRGB(169, 155, 255),
+    accentA = Color3.fromRGB(91, 145, 220),
+    accentB = Color3.fromRGB(91, 145, 220),
     theme = {
-        bg = Color3.fromRGB(10, 17, 40),
-        text = Color3.fromRGB(237, 244, 255)
+        bg = Color3.fromRGB(17, 17, 17),
+        sidebar = Color3.fromRGB(12, 12, 12),
+        text = Color3.fromRGB(238, 238, 238),
+        sub = Color3.fromRGB(170, 170, 174),
+        surface = Color3.fromRGB(17, 17, 17),
+        surface2 = Color3.fromRGB(24, 25, 27),
+        surface3 = Color3.fromRGB(31, 33, 36),
+        border = Color3.fromRGB(61, 65, 76),
+        trackOff = Color3.fromRGB(71, 71, 71),
+        sliderTrack = Color3.fromRGB(71, 71, 71)
     },
-    font = "Proxima",
-    backgroundEffect = "Snow",
-    backgroundEffectColor = Color3.fromRGB(156, 194, 255),
-    logo = "https://celest.solutions/apple-touch-icon.png",
-    icon = "https://celest.solutions/apple-touch-icon.png",
-    opacity = 0.96,
-    rounding = 1,
-    rowLines = true,
-    checkboxStyle = false,
+    font = "Pixel",
+    backgroundEffect = "Off",
+    opacity = 1,
+    rounding = 0,
+    rowLines = false,
+    checkboxStyle = true,
+    railOnly = false,
+    skeetMode = true,
+    searchStyle = "off",
+    lockChrome = true,
     smartFps = true,
     gameInput = true,
     autoSave = true,
@@ -1558,23 +1694,15 @@ _G.CelestialFarmUI = window
 Lib:SetLayout("side")
 
 Lib:Category("ORBITS")
-local world3Tab = window:Tab("World 3", "sparkles")
+local world3Tab = window:Tab("World 3", "target")
 local world3Control = world3Tab:Section(
     "World 3 Orbit",
-    "Left",
-    "Stage 1 Event oder WinBlock35"
+    "Left"
 )
 local world3Live = world3Tab:Section(
     "Live Orbit",
-    "Right",
-    "Aktueller Lauf"
+    "Right"
 )
-
-world3Control:Label(function()
-    return game.PlaceId == WORLD3_PLACE_ID
-        and "Bereit in World 3"
-        or "Nicht in dieser Welt"
-end)
 
 local world3AutoHandle
 
@@ -1590,18 +1718,38 @@ world3AutoHandle = world3Control:Toggle(
     end
 )
 
+world3Control:Toggle(
+    "Collect Summer Coins",
+    false,
+    function(enabled)
+        world3.collectSummerCoins = enabled == true
+    end
+)
+
 world3Control:Dropdown(
-    "Farm Route",
-    "Stage 1 Event",
-    { "Stage 1 Event", "WinBlock35" },
+    "Route",
+    "Stage 1",
+    { "Stage 1", "Stage 5" },
     false,
     function(value)
-        world3.route = value
+        local selected = type(value) == "table" and value[1] or value
+
+        if selected == "Stage 1 Event" then
+            selected = "Stage 1"
+        elseif selected == "WinBlock35" then
+            selected = "Stage 5"
+        end
+
+        if type(value) == "table" then
+            value[1] = selected
+        end
+
+        world3.route = selected
     end
 )
 
 world3Control:Slider(
-    "Tween Speed",
+    "Speed",
     300,
     10,
     50,
@@ -1612,7 +1760,7 @@ world3Control:Slider(
     end
 )
 
-world3Control:Button("Run Once", function()
+world3Control:Button("Run", function()
     runWorld3(true)
 end):AddButton("Stop", function()
     stopWorld3()
@@ -1622,45 +1770,28 @@ end):AddButton("Stop", function()
     end
 end)
 
-world3Control:Info(
-    "Stage 1 läuft zum sicheren Startpunkt, springt zum Eingang und steuert dann diagonal auf WinBlock32."
-)
-
 world3Live:Label(function()
     return "Status: " .. world3.status
 end)
 world3Live:Label(function()
     return "Position: " .. world3.point
 end)
-world3Live:Divider("Session")
 world3Live:Label(function()
     return "Orbits: " .. tostring(world3.cycles)
 end)
 world3Live:Label(function()
-    return "Letzter Reward: " .. formatNumber(world3.lastReward)
+    return "Letzte Wins: " .. formatNumber(world3.lastReward)
 end)
 
 local bbnoTab = window:Tab("BBNO$", "rocket")
 local bbnoControl = bbnoTab:Section(
     "BBNO$ Orbit",
-    "Left",
-    "Stage 2 bis Reward Plate"
+    "Left"
 )
 local bbnoLive = bbnoTab:Section(
     "Live Orbit",
-    "Right",
-    "Aktueller Lauf"
+    "Right"
 )
-
-bbnoControl:Label(function()
-    if game.PlaceId == BBNO_PLACE_ID then
-        return "Bereit in BBNO$ World"
-    elseif game.PlaceId == BBNO_LOBBY_PLACE_ID then
-        return "World-1-Lobby erkannt"
-    end
-
-    return "Nicht in dieser Welt"
-end)
 
 local bbnoAutoHandle
 
@@ -1677,7 +1808,7 @@ bbnoAutoHandle = bbnoControl:Toggle(
 )
 
 bbnoControl:Slider(
-    "Sprint Speed",
+    "Speed",
     300,
     10,
     100,
@@ -1697,9 +1828,9 @@ bbnoControl:Toggle(
     end
 )
 
-bbnoControl:Button("Run Once", function()
+bbnoControl:Button("Run", function()
     runBbno(true)
-end):AddButton("Join BBNO$", function()
+end):AddButton("Join", function()
     joinBbno(true)
 end):AddButton("Stop", function()
     stopBbno()
@@ -1709,10 +1840,6 @@ end):AddButton("Stop", function()
     end
 end)
 
-bbnoControl:Info(
-    "Auto Rejoin wechselt nach einem Update aus der World-1-Lobby zurück zu BBNO$. Gespeicherte Routenpunkte bleiben erhalten."
-)
-
 bbnoLive:Label(function()
     return "Status: " .. bbno.status
 end)
@@ -1720,15 +1847,8 @@ bbnoLive:Label(function()
     return "Phase: " .. bbno.stage
 end)
 bbnoLive:Label(function()
-    if not bbno.autoJoin then
-        return "Rejoin: Aus"
-    elseif type(queueTeleport) == "function" then
-        return "Rejoin: Restart-Schutz aktiv"
-    end
-
-    return "Rejoin: Lobby-Wächter aktiv"
+    return bbno.autoJoin and "Rejoin: On" or "Rejoin: Off"
 end)
-bbnoLive:Divider("Session")
 bbnoLive:Label(function()
     return "Orbits: " .. tostring(bbno.cycles)
 end)
@@ -1736,16 +1856,14 @@ bbnoLive:Label(function()
     return "Verdient: " .. formatNumber(bbno.earned)
 end)
 
-local summerTab = window:Tab("Summer Coins", "sun")
+local summerTab = window:Tab("Summer Coins", "star")
 local summerControl = summerTab:Section(
     "Summer Coin Collector",
-    "Left",
-    "Sammelt aktive Event-Coins"
+    "Left"
 )
 local summerLive = summerTab:Section(
     "Live",
-    "Right",
-    "Aktueller Collector-Status"
+    "Right"
 )
 
 local summerAutoHandle
@@ -1762,7 +1880,7 @@ summerAutoHandle = summerControl:Toggle(
     end
 )
 
-summerControl:Button("Collect Once", function()
+summerControl:Button("Collect", function()
     if not collectNearestSummerCoin() then
         Lib:Notify(
             "Summer Coins",
@@ -1778,10 +1896,6 @@ end):AddButton("Stop", function()
         summerAutoHandle:Set(false)
     end
 end)
-
-summerControl:Info(
-    "Auto Collect stoppt laufende Farmen und teleportiert im serverseitigen 0,12-Sekunden-Sammelfenster zur nächsten Coin."
-)
 
 summerLive:Label(function()
     return "Status: " .. summerCoins.status
@@ -1800,7 +1914,6 @@ summerLive:Label(function()
 
     return "Aktive Coins: " .. tostring(count)
 end)
-summerLive:Divider("Session")
 summerLive:Label(function()
     return "Eingesammelt: " .. tostring(summerCoins.collected)
 end)
@@ -1840,7 +1953,7 @@ end)
 
 Lib:Notify(
     "Celestial",
-    "Orbit Farm bereit · P öffnet das Menü",
+    "Orbit Farm bereit · ENTF öffnet das Menü",
     4,
     "success"
 )

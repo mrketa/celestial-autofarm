@@ -1,6 +1,8 @@
 # Celestial Autofarm
 
-Matcha loader for the combined World 3 and BBNO$ autofarm.
+Matcha loader for the combined World 3, BBNO$, and Summer Coin autofarm.
+
+The bundled Skeet-style menu opens with `Delete`/`Entf`.
 
 ```lua
 loadstring(game:HttpGet(
