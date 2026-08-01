@@ -1,22 +1,14 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local HttpService = game:GetService("HttpService")
-local TeleportService = game:GetService("TeleportService")
-
-local BBNO_PLACE_ID = 75012837977315
-local BBNO_LOBBY_PLACE_ID = 95082159892680
 local WORLD3_PLACE_ID = 93411036959889
 local UINT32_RANGE = 4294967296
 local MOTION_TICK = 1 / 30
 local POLL_TICK = 0.05
-local BBNO_AUTOJOIN_PREF = "celestial_bbno_autojoin.txt"
 local player = Players.LocalPlayer
-local scriptStartedAt = tick()
 
 _G.CelestialFarmGeneration = (_G.CelestialFarmGeneration or 0) + 1
 _G.World3AutoRouteSession = (_G.World3AutoRouteSession or 0) + 1
 _G.World3AutoRouteRun = (_G.World3AutoRouteRun or 0) + 1
-_G.CashFarmSession = (_G.CashFarmSession or 0) + 1
 
 local generation = _G.CelestialFarmGeneration
 
@@ -29,7 +21,9 @@ end)
 pcall(function()
     UI.RemoveTab("World 3")
     UI.RemoveTab("BBNO$ World")
-    UI.RemoveTab("Cash Farm")
+    UI.RemoveTab("BBNO$")
+    UI.RemoveTab("Summer Coins")
+    UI.RemoveTab("Events")
 end)
 
 local INS_UI_URL = "https://raw.githubusercontent.com/mrketa/celestial-autofarm/main/celestial_ui.lua"
@@ -42,14 +36,14 @@ local fetched, librarySource = pcall(function()
 end)
 
 if not fetched or type(librarySource) ~= "string" then
-    warn("[Celestial] INS-ui Download fehlgeschlagen")
+    warn("[Celestial] INS-ui download failed")
     return
 end
 
 local Lib = loadstring(librarySource)() or INSui
 
 if not Lib then
-    warn("[Celestial] INS-ui konnte nicht geladen werden")
+    warn("[Celestial] INS-ui could not be loaded")
     return
 end
 
@@ -58,35 +52,6 @@ local function getRoot()
 
     return character
         and character:FindFirstChild("HumanoidRootPart")
-end
-
-local function getCash()
-    local leaderstats = player:FindFirstChild("leaderstats")
-
-    if not leaderstats then
-        return nil
-    end
-
-    local exact = leaderstats:FindFirstChild("$ CASH $")
-
-    if exact then
-        return exact
-    end
-
-    for _, value in ipairs(leaderstats:GetChildren()) do
-        if value:IsA("ValueBase")
-            and string.find(
-                string.lower(value.Name),
-                "cash",
-                1,
-                true
-            )
-        then
-            return value
-        end
-    end
-
-    return leaderstats:FindFirstChild("Wins")
 end
 
 local function getWorld3Wins()
@@ -102,26 +67,6 @@ end
 
 local function stopRoot()
     stopPart(getRoot())
-end
-
-local function readBbnoAutoJoin(defaultValue)
-    if not isfile or not readfile or not isfile(BBNO_AUTOJOIN_PREF) then
-        return defaultValue
-    end
-
-    local ok, value = pcall(readfile, BBNO_AUTOJOIN_PREF)
-
-    if not ok then
-        return defaultValue
-    end
-
-    return tostring(value) == "true"
-end
-
-local function writeBbnoAutoJoin(enabled)
-    if writefile then
-        pcall(writefile, BBNO_AUTOJOIN_PREF, enabled and "true" or "false")
-    end
 end
 
 local function formatNumber(value)
@@ -147,7 +92,7 @@ local function cashDelta(currentValue, previousValue)
 end
 
 local function cleanError(value)
-    local text = tostring(value or "Unbekannter Fehler")
+    local text = tostring(value or "Unknown error")
     local message = string.match(text, "^[^:]+:%d+:%s*(.+)$")
 
     return message or text
@@ -158,33 +103,39 @@ local world3 = {
     running = false,
     route = "Stage 1",
     speed = 300,
-    status = "Bereit",
+    status = "Ready",
     point = "Spawn",
     cycles = 0,
+    earned = 0,
     lastReward = 0,
     lastRewardAt = nil,
-    collectSummerCoins = false,
     runToken = 0,
-    spawnPosition = nil
+    spawnPosition = nil,
+    eventsActive = false,
+    autoVoidRecovery = true,
+    voidRecoveryPending = false,
+    voidRecoveries = 0
 }
 
-local collectWorld3SummerCoins
 local returnToWorld3Spawn
 
-local summerCoins = {
-    auto = false,
-    running = false,
-    status = "Wartet auf Coins",
-    collected = 0,
-    visited = {},
-    returnedToSpawn = false
-}
-
-local WORLD3_MINIMUM_TIME = 12.5
-local WORLD3_WIN_PLATE = Vector3.new(
+local WORLD3_STAGE5_MINIMUM_TIME = 12.5
+local WORLD3_STAGE5_WIN_PLATE = Vector3.new(
     -1431.3326,
     536.1462,
     759.6248
+)
+local WORLD3_STAGE6_MINIMUM_TIME = 15.5
+local WORLD3_STAGE6_WIN_PLATE = Vector3.new(
+    -1431.4525,
+    533.6140,
+    1329.8270
+)
+local WORLD3_STAGE7_MINIMUM_TIME = 18.5
+local WORLD3_STAGE7_WIN_PLATE = Vector3.new(
+    -2062.3730,
+    443.6126,
+    1459.3718
 )
 local WORLD3_STAGE1_REWARD_INTERVAL = 3
 local WORLD3_ROUTE = {
@@ -255,10 +206,126 @@ local WORLD3_ROUTE = {
         )
     }
 }
+local WORLD3_STAGE6_ROUTE = {}
+
+for index = 1, #WORLD3_ROUTE - 1 do
+    table.insert(WORLD3_STAGE6_ROUTE, WORLD3_ROUTE[index])
+end
+
+for _, point in ipairs({
+    {
+        name = "Stage 5 Lower",
+        position = Vector3.new(-1404.4468, 390.5382, 724.7380)
+    },
+    {
+        name = "Stage 5 Rise",
+        position = Vector3.new(-1404.4468, 533.8660, 724.7380)
+    },
+    {
+        name = "Stage 5 Curve 1",
+        position = Vector3.new(-1400.3630, 533.8660, 772.5512)
+    },
+    {
+        name = "Stage 5 Curve 2",
+        position = Vector3.new(-1362.1042, 533.8660, 840.0916)
+    },
+    {
+        name = "Stage 5 Curve 3",
+        position = Vector3.new(-1303.8162, 533.8660, 915.6722)
+    },
+    {
+        name = "Stage 5 Curve 4",
+        position = Vector3.new(-1260.5690, 533.8660, 1030.5386)
+    },
+    {
+        name = "Stage 5 Curve 5",
+        position = Vector3.new(-1280.7828, 533.8660, 1100.2794)
+    },
+    {
+        name = "Stage 5 Curve 6",
+        position = Vector3.new(-1337.5544, 533.8660, 1205.0078)
+    },
+    {
+        name = "Stage 5 Curve 7",
+        position = Vector3.new(-1397.1460, 533.8660, 1344.5568)
+    },
+    {
+        name = "WinBlock36 staging",
+        position = Vector3.new(-1422.8318, 533.8660, 1335.9071)
+    }
+}) do
+    table.insert(WORLD3_STAGE6_ROUTE, point)
+end
+
+local WORLD3_STAGE7_ROUTE = {}
+
+for index = 1, #WORLD3_STAGE6_ROUTE - 1 do
+    table.insert(WORLD3_STAGE7_ROUTE, WORLD3_STAGE6_ROUTE[index])
+end
+
+for _, point in ipairs({
+    {
+        name = "Stage 6 Curve 1",
+        position = Vector3.new(-1391.9022, 533.8642, 1365.9102)
+    },
+    {
+        name = "Stage 6 Curve 2",
+        position = Vector3.new(-1397.8521, 533.8641, 1406.8398)
+    },
+    {
+        name = "Stage 6 Gate",
+        position = Vector3.new(-1402.4264, 533.8641, 1427.2498)
+    },
+    {
+        name = "Stage 6 Drop 1",
+        position = Vector3.new(-1397.9819, 541.0258, 1448.9692),
+        tsunamiWindow = true,
+        minimumSpeed = 300
+    },
+    {
+        name = "Stage 6 Drop 2",
+        position = Vector3.new(-1433.3904, 502.0983, 1465.3796),
+        minimumSpeed = 300
+    },
+    {
+        name = "Stage 6 Floor",
+        position = Vector3.new(-1475.4453, 443.2820, 1472.2993),
+        minimumSpeed = 300
+    },
+    {
+        name = "Stage 6 Run 1",
+        position = Vector3.new(-1582.7493, 443.8641, 1475.2930),
+        minimumSpeed = 300
+    },
+    {
+        name = "Stage 6 Run 2",
+        position = Vector3.new(-1708.5725, 443.8643, 1477.6670),
+        minimumSpeed = 300
+    },
+    {
+        name = "Stage 6 Run 3",
+        position = Vector3.new(-1834.3958, 443.8653, 1478.9807),
+        minimumSpeed = 300
+    },
+    {
+        name = "Stage 6 Run 4",
+        position = Vector3.new(-1951.4202, 446.4776, 1479.5720),
+        minimumSpeed = 300
+    },
+    {
+        name = "WinBlock37 safezone",
+        position = Vector3.new(-2058.228516, 443.873718, 1484.287231),
+        dwell = 0.25,
+        minimumSpeed = 300
+    }
+}) do
+    table.insert(WORLD3_STAGE7_ROUTE, point)
+end
 
 local function world3MayContinue(forceRun, token)
     return generation == _G.CelestialFarmGeneration
         and token == world3.runToken
+        and not world3.eventsActive
         and (forceRun or world3.auto)
 end
 
@@ -267,7 +334,7 @@ local function waitForWorld3Spawn(forceRun, token)
     local stableSince
     local lastPosition
 
-    world3.status = "Spawn wird synchronisiert"
+    world3.status = "Syncing spawn"
     world3.point = "Spawn"
 
     while tick() < deadline do
@@ -279,7 +346,9 @@ local function waitForWorld3Spawn(forceRun, token)
 
         if root then
             local position = root.Position
-            local atSpawn = position.Y < -120 and position.Z < -900
+            local atSpawn = position.Y > -300
+                and position.Y < -120
+                and position.Z < -900
             local stable = lastPosition
                 and (position - lastPosition).Magnitude < 1
 
@@ -307,28 +376,28 @@ local function waitForWorld3Spawn(forceRun, token)
     return false
 end
 
-local function tweenWorld3(target, forceRun, token, dwell)
+local function tweenWorld3(target, forceRun, token, dwell, speed)
     local root = getRoot()
 
     if not root then
-        return false, "Charakter nicht verfügbar"
+        return false, "Character unavailable"
     end
 
     local startPosition = root.Position
     local distance = (target - startPosition).Magnitude
-    local duration = distance / math.max(world3.speed, 1)
+    local duration = distance / math.max(speed or world3.speed, 1)
     local startedAt = tick()
 
     while tick() - startedAt < duration do
         if not world3MayContinue(forceRun, token) then
             stopPart(root)
-            return false, "Gestoppt"
+            return false, "Stopped"
         end
 
         root = getRoot()
 
         if not root then
-            return false, "Charakter wurde ersetzt"
+            return false, "Character was replaced"
         end
 
         local alpha = math.min((tick() - startedAt) / duration, 1)
@@ -342,7 +411,7 @@ local function tweenWorld3(target, forceRun, token, dwell)
     root = getRoot()
 
     if not root then
-        return false, "Charakter wurde ersetzt"
+        return false, "Character was replaced"
     end
 
     stopPart(root)
@@ -350,7 +419,7 @@ local function tweenWorld3(target, forceRun, token, dwell)
     task.wait(dwell or 0.2)
 
     if (root.Position - target).Magnitude > 12 then
-        return false, "Bewegung wurde korrigiert"
+        return false, "Movement was corrected"
     end
 
     return true
@@ -361,13 +430,13 @@ local function moveWorld3Physics(target, forceRun, token, dwell)
 
     while tick() < deadline do
         if not world3MayContinue(forceRun, token) then
-            return false, "Gestoppt"
+            return false, "Stopped"
         end
 
         local root = getRoot()
 
         if not root then
-            return false, "Charakter nicht verfügbar"
+            return false, "Character unavailable"
         end
 
         local offset = Vector3.new(
@@ -391,15 +460,22 @@ local function moveWorld3Physics(target, forceRun, token, dwell)
     end
 
     stopRoot()
-    return false, "Safe Start wurde nicht erreicht"
+    return false, "Safe Start not reached"
 end
 
-local function enterWorld3WinPlate(cashValue, cashBefore, forceRun, token)
+local function enterWorld3WinPlate(
+    cashValue,
+    cashBefore,
+    forceRun,
+    token,
+    target,
+    stageLabel
+)
     local deadline = tick() + 5
     local reached = false
 
-    world3.status = "Stage 5 wird betreten"
-    world3.point = "Stage 5"
+    world3.status = "Entering " .. stageLabel
+    world3.point = stageLabel
 
     while tick() < deadline do
         if cashValue.Value ~= cashBefore then
@@ -415,9 +491,9 @@ local function enterWorld3WinPlate(cashValue, cashBefore, forceRun, token)
         end
 
         local offset = Vector3.new(
-            WORLD3_WIN_PLATE.X - root.Position.X,
+            target.X - root.Position.X,
             0,
-            WORLD3_WIN_PLATE.Z - root.Position.Z
+            target.Z - root.Position.Z
         )
 
         if offset.Magnitude <= 1.5 then
@@ -440,7 +516,7 @@ local function enterWorld3WinPlate(cashValue, cashBefore, forceRun, token)
         return cashValue.Value ~= cashBefore
     end
 
-    world3.status = "Reward wird bestätigt"
+    world3.status = "Confirming reward"
     local rewardDeadline = tick() + 5
 
     while tick() < rewardDeadline do
@@ -459,7 +535,7 @@ end
 local function waitForWorld3Reset(forceRun, token)
     local deadline = tick() + 8
 
-    world3.status = "Nächster Orbit wird vorbereitet"
+    world3.status = "Preparing next run"
     world3.point = "Reset"
 
     while tick() < deadline do
@@ -469,7 +545,11 @@ local function waitForWorld3Reset(forceRun, token)
 
         local root = getRoot()
 
-        if root and root.Position.Y < -120 and root.Position.Z < -900 then
+        if root
+            and root.Position.Y > -300
+            and root.Position.Y < -120
+            and root.Position.Z < -900
+        then
             task.wait(0.5)
             return true
         end
@@ -478,6 +558,142 @@ local function waitForWorld3Reset(forceRun, token)
     end
 
     return false
+end
+
+local function waitForWorld3TsunamiWindow(forceRun, token)
+    local deadline = tick() + 8
+
+    world3.status = "Waiting for tsunami window"
+    world3.point = "Stage 6 Gate"
+
+    while tick() < deadline do
+        if not world3MayContinue(forceRun, token) then
+            return false, "Stopped"
+        end
+
+        local hazards = workspace:FindFirstChild("NPC & Piege")
+        local tsunamiModel = hazards
+            and hazards:FindFirstChild("Tsunami1")
+        local tsunami = tsunamiModel
+            and tsunamiModel:FindFirstChild("Tsunami")
+
+        if not tsunami or not tsunami:IsA("BasePart") then
+            return false, "Tsunami not found"
+        end
+
+        local tsunamiX = tsunami.Position.X
+
+        if tsunamiX < -1625 and tsunamiX > -1725 then
+            return true
+        end
+
+        task.wait(0.02)
+    end
+
+    return false, "No safe tsunami window detected"
+end
+
+local function forceWorld3VoidRecovery(forceRun, token)
+    assert(world3MayContinue(forceRun, token), "Stopped")
+
+    if world3.voidRecoveryPending or not world3.autoVoidRecovery then
+        return false
+    end
+
+    local character = player.Character
+    local root = getRoot()
+    local humanoid = character
+        and character:FindFirstChildOfClass("Humanoid")
+
+    if not character or not root then
+        return false
+    end
+
+    world3.voidRecoveryPending = true
+    world3.status = "Forcing character reset"
+    world3.point = "Reset"
+    world3.spawnPosition = nil
+
+    assert(world3MayContinue(forceRun, token), "Stopped")
+    local killed = pcall(function()
+        if humanoid then
+            humanoid.Health = 0
+            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
+        end
+        character:BreakJoints()
+    end)
+
+    if not killed then
+        world3.voidRecoveryPending = false
+        return false
+    end
+
+    local deadline = tick() + 15
+    local lastDropAt = tick()
+
+    while tick() < deadline do
+        assert(world3MayContinue(forceRun, token), "Stopped")
+
+        local currentRoot = getRoot()
+        local currentPosition = currentRoot and currentRoot.Position
+        local atSpawn = currentPosition
+            and currentPosition.Y > -300
+            and currentPosition.Y < -120
+            and currentPosition.Z < -900
+
+        if atSpawn then
+            world3.status = "Verifying void recovery"
+            world3.point = "Spawn"
+            task.wait(0.5)
+            local recovered = waitForWorld3Spawn(forceRun, token)
+            if not recovered then
+                world3.voidRecoveryPending = false
+            end
+            return recovered
+        elseif tick() - lastDropAt >= 0.4 then
+            pcall(function()
+                stopPart(root)
+                root.Position = Vector3.new(
+                    root.Position.X,
+                    -1000,
+                    -1000
+                )
+                root.AssemblyLinearVelocity = Vector3.new(
+                    0,
+                    -250,
+                    0
+                )
+            end)
+
+            if not currentRoot then
+                pcall(function()
+                    character:BreakJoints()
+                end)
+            end
+
+            lastDropAt = tick()
+        end
+
+        task.wait(0.1)
+    end
+
+    world3.voidRecoveryPending = false
+    return false
+end
+
+local function confirmWorld3RewardHealth()
+    if not world3.voidRecoveryPending then
+        return
+    end
+
+    world3.voidRecoveryPending = false
+    world3.voidRecoveries = world3.voidRecoveries + 1
+    Lib:Notify(
+        "Void Recovery",
+        "Wins collection restored.",
+        4,
+        "success"
+    )
 end
 
 local function getWorld3Stage1WinBlock()
@@ -495,13 +711,13 @@ end
 
 local function runWorld3Stage1Attempt(forceRun, token)
     if not waitForWorld3Spawn(forceRun, token) then
-        assert(world3MayContinue(forceRun, token), "Gestoppt")
-        error("Kein stabiler Spawn gefunden")
+        assert(world3MayContinue(forceRun, token), "Stopped")
+        error("No stable spawn found")
     end
 
     local safeStart = WORLD3_ROUTE[1]
 
-    world3.status = "Safe Start wird angelaufen"
+    world3.status = "Moving to Safe Start"
     world3.point = "Stage1SafeStart"
 
     local safe, safeError = moveWorld3Physics(
@@ -516,21 +732,22 @@ local function runWorld3Stage1Attempt(forceRun, token)
     local cashValue = getWorld3Wins()
     local winBlock = getWorld3Stage1WinBlock()
 
-    assert(cashValue, "Wins-Wert nicht verfügbar")
-    assert(winBlock, "WinBlock32 nicht gefunden")
+    assert(cashValue, "Wins value unavailable")
+    assert(winBlock, "WinBlock32 not found")
 
     local root = getRoot()
-    assert(root, "Charakter nicht verfügbar")
+    assert(root, "Character unavailable")
     local stage1Entry = WORLD3_ROUTE[2].position
     local cashBefore = cashValue.Value
 
-    world3.status = "Direkt zu Stage 1"
-    world3.point = "Stage 1 Eingang"
+    world3.status = "Going directly to Stage 1"
+    world3.point = "Stage 1 Entrance"
     local reachedStage1 = false
 
     for attempt = 1, 3 do
+        assert(world3MayContinue(forceRun, token), "Stopped")
         root = getRoot()
-        assert(root, "Charakter nicht verfügbar")
+        assert(root, "Character unavailable")
 
         root.CFrame = CFrame.new(
             stage1Entry.X,
@@ -549,7 +766,7 @@ local function runWorld3Stage1Attempt(forceRun, token)
 
         if attempt < 3 then
             world3.status = string.format(
-                "Stage 1 Versuch %d/3",
+                "Stage 1 attempt %d/3",
                 attempt + 1
             )
         end
@@ -557,12 +774,24 @@ local function runWorld3Stage1Attempt(forceRun, token)
 
     if not reachedStage1 then
         stopRoot()
-        world3.status = "Stage 1 TP korrigiert"
+        world3.status = "Correcting Stage 1 teleport"
         world3.point = "Recovery"
 
+        if world3.autoVoidRecovery then
+            if world3.voidRecoveryPending then
+                error("Position correction remained after void recovery")
+            end
+
+            if forceWorld3VoidRecovery(forceRun, token) then
+                return false
+            end
+
+            error("Void recovery failed")
+        end
+
         repeat
-            assert(world3MayContinue(forceRun, token), "Gestoppt")
-            world3.status = "Kehrt zum Spawn zurück"
+            assert(world3MayContinue(forceRun, token), "Stopped")
+            world3.status = "Returning to spawn"
             task.wait(0.5)
         until returnToWorld3Spawn()
 
@@ -584,10 +813,10 @@ local function runWorld3Stage1Attempt(forceRun, token)
             + WORLD3_STAGE1_REWARD_INTERVAL
             - estimatedWalkTime
 
-        world3.status = "Wartet auf Lauf-Fenster"
+        world3.status = "Waiting for movement window"
 
         while tick() < walkAt do
-            assert(world3MayContinue(forceRun, token), "Gestoppt")
+            assert(world3MayContinue(forceRun, token), "Stopped")
             task.wait(math.max(
                 0.001,
                 math.min(POLL_TICK, walkAt - tick())
@@ -595,7 +824,7 @@ local function runWorld3Stage1Attempt(forceRun, token)
         end
     end
 
-    world3.status = "Läuft auf WinBlock32"
+    world3.status = "Moving to WinBlock32"
     world3.point = "WinBlock32"
     local rewardDeadline = tick() + 2.5
     local lastDistance = math.huge
@@ -604,7 +833,7 @@ local function runWorld3Stage1Attempt(forceRun, token)
     while tick() < rewardDeadline do
         if not world3MayContinue(forceRun, token) then
             stopRoot()
-            error("Gestoppt")
+            error("Stopped")
         end
 
         if cashValue.Value ~= cashBefore then
@@ -612,9 +841,11 @@ local function runWorld3Stage1Attempt(forceRun, token)
             local reward = cashDelta(cashValue.Value, cashBefore)
 
             world3.cycles = world3.cycles + 1
+            world3.earned = world3.earned + reward
             world3.lastReward = reward
             world3.lastRewardAt = tick()
-            world3.status = "Stage-1-Reward bestätigt"
+            world3.status = "Stage 1 reward confirmed"
+            confirmWorld3RewardHealth()
 
             Lib:Notify(
                 "World 3 Stage 1",
@@ -624,12 +855,8 @@ local function runWorld3Stage1Attempt(forceRun, token)
             )
 
             if not waitForWorld3Reset(forceRun, token) then
-                assert(world3MayContinue(forceRun, token), "Gestoppt")
-                error("Spawn-Reset nicht erkannt")
-            end
-
-            if world3.collectSummerCoins then
-                collectWorld3SummerCoins(forceRun, token)
+                assert(world3MayContinue(forceRun, token), "Stopped")
+                error("Spawn reset not detected")
             end
 
             return true
@@ -638,7 +865,7 @@ local function runWorld3Stage1Attempt(forceRun, token)
         root = getRoot()
 
         if not root then
-            error("Charakter nicht verfügbar")
+            error("Character unavailable")
         end
 
         local offset = Vector3.new(
@@ -673,7 +900,19 @@ local function runWorld3Stage1Attempt(forceRun, token)
 
     stopRoot()
 
-    error("WinBlock32-Reward wurde nicht erkannt")
+    if world3.autoVoidRecovery then
+        if world3.voidRecoveryPending then
+            error("Wins still unavailable after void recovery")
+        end
+
+        if forceWorld3VoidRecovery(forceRun, token) then
+            return false
+        end
+
+        error("Void recovery failed")
+    end
+
+    error("WinBlock32 reward not detected")
 end
 
 local function runWorld3Stage1Cycle(forceRun, token)
@@ -693,33 +932,59 @@ local function runWorld3Stage1Cycle(forceRun, token)
         task.wait(math.min(0.5 + recoveries * 0.15, 2))
     end
 
-    error("Gestoppt")
+    error("Stopped")
 end
 
 local function runWorld3WinBlock35Cycle(forceRun, token)
     if not waitForWorld3Spawn(forceRun, token) then
-        assert(world3MayContinue(forceRun, token), "Gestoppt")
-        error("Kein stabiler Spawn gefunden")
+        assert(world3MayContinue(forceRun, token), "Stopped")
+        error("No stable spawn found")
     end
 
     local cashValue = getWorld3Wins()
 
-    assert(cashValue, "Wins-Wert nicht verfügbar")
+    assert(cashValue, "Wins value unavailable")
 
     local cashBefore = cashValue.Value
     local cycleStartedAt = tick()
+    local route = WORLD3_ROUTE
+    local minimumTime = WORLD3_STAGE5_MINIMUM_TIME
+    local winPlate = WORLD3_STAGE5_WIN_PLATE
+    local stageLabel = "Stage 5"
 
-    for index, point in ipairs(WORLD3_ROUTE) do
-        world3.status = "Route läuft"
+    if world3.route == "Stage 7" then
+        route = WORLD3_STAGE7_ROUTE
+        minimumTime = WORLD3_STAGE7_MINIMUM_TIME
+        winPlate = WORLD3_STAGE7_WIN_PLATE
+        stageLabel = "Stage 7"
+    elseif world3.route == "Stage 6" then
+        route = WORLD3_STAGE6_ROUTE
+        minimumTime = WORLD3_STAGE6_MINIMUM_TIME
+        winPlate = WORLD3_STAGE6_WIN_PLATE
+        stageLabel = "Stage 6"
+    end
+
+    for index, point in ipairs(route) do
+        world3.status = "Running route"
         world3.point = string.format(
             "%d/%d  %s",
             index,
-            #WORLD3_ROUTE,
+            #route,
             point.name
         )
 
         local moved
         local moveError
+
+        if point.tsunamiWindow then
+            local safeWindow, windowError = waitForWorld3TsunamiWindow(
+                forceRun,
+                token
+            )
+            assert(safeWindow, windowError)
+            world3.status = "Running tsunami window"
+            world3.point = point.name
+        end
 
         if point.physics then
             moved, moveError = moveWorld3Physics(
@@ -734,15 +999,22 @@ local function runWorld3WinBlock35Cycle(forceRun, token)
                     point.position,
                     forceRun,
                     token,
-                    point.dwell
+                    point.dwell,
+                    point.minimumSpeed
+                        and math.max(world3.speed, point.minimumSpeed)
+                        or nil
                 )
 
-                if moved or moveError ~= "Bewegung wurde korrigiert" then
+                if moved or moveError ~= "Movement was corrected" then
+                    break
+                end
+
+                if world3.autoVoidRecovery then
                     break
                 end
 
                 world3.status = string.format(
-                    "%s: Versuch %d/3",
+                    "%s: attempt %d/3",
                     point.name,
                     attempt + 1
                 )
@@ -750,15 +1022,30 @@ local function runWorld3WinBlock35Cycle(forceRun, token)
             end
         end
 
+        if not moved
+            and moveError == "Movement was corrected"
+            and world3.autoVoidRecovery
+        then
+            if world3.voidRecoveryPending then
+                error("Position correction remained after void recovery")
+            end
+
+            assert(
+                forceWorld3VoidRecovery(forceRun, token),
+                "Void recovery failed"
+            )
+            return runWorld3WinBlock35Cycle(forceRun, token)
+        end
+
         assert(moved, point.name .. ": " .. tostring(moveError))
     end
 
-    world3.status = "Wartet auf Reward"
+    world3.status = "Waiting for reward"
     world3.point = "Win staging"
     stopRoot()
 
-    while tick() - cycleStartedAt < WORLD3_MINIMUM_TIME do
-        assert(world3MayContinue(forceRun, token), "Gestoppt")
+    while tick() - cycleStartedAt < minimumTime do
+        assert(world3MayContinue(forceRun, token), "Stopped")
         task.wait(POLL_TICK)
     end
 
@@ -766,49 +1053,72 @@ local function runWorld3WinBlock35Cycle(forceRun, token)
         cashValue,
         cashBefore,
         forceRun,
-        token
+        token,
+        winPlate,
+        stageLabel
     ) then
-        assert(world3MayContinue(forceRun, token), "Gestoppt")
-        error("Reward wurde nicht erkannt")
+        assert(world3MayContinue(forceRun, token), "Stopped")
+
+        if world3.autoVoidRecovery then
+            if world3.voidRecoveryPending then
+                error("Wins still unavailable after void recovery")
+            end
+
+            assert(
+                forceWorld3VoidRecovery(forceRun, token),
+                "Void recovery failed"
+            )
+            return runWorld3WinBlock35Cycle(forceRun, token)
+        end
+
+        error("Reward not detected")
     end
 
     local reward = cashDelta(cashValue.Value, cashBefore)
 
     world3.cycles = world3.cycles + 1
+    world3.earned = world3.earned + reward
     world3.lastReward = reward
     world3.lastRewardAt = tick()
-    world3.status = "Reward bestätigt"
-    world3.point = "Stage 5"
+    world3.status = "Reward confirmed"
+    world3.point = stageLabel
+    confirmWorld3RewardHealth()
 
     Lib:Notify(
-        "World 3 Stage 5",
+        "World 3 " .. stageLabel,
         "+" .. formatNumber(reward) .. " Wins",
         2,
         "success"
     )
 
     if not waitForWorld3Reset(forceRun, token) then
-        assert(world3MayContinue(forceRun, token), "Gestoppt")
-        error("Spawn-Reset nicht erkannt")
+        assert(world3MayContinue(forceRun, token), "Stopped")
+        error("Spawn reset not detected")
     end
 
-    if world3.collectSummerCoins then
-        collectWorld3SummerCoins(forceRun, token)
-    end
 end
 
 local function runWorld3(forceRun)
-    if game.PlaceId ~= WORLD3_PLACE_ID then
+    if world3.eventsActive then
         world3.auto = false
         Lib:Notify(
             "World 3",
-            "Wechsle zuerst in World 3.",
+            "Stop the event collectors first.",
+            3,
+            "warning"
+        )
+        return
+    elseif game.PlaceId ~= WORLD3_PLACE_ID then
+        world3.auto = false
+        Lib:Notify(
+            "World 3",
+            "Switch to World 3 first.",
             3,
             "warning"
         )
         return
     elseif world3.running then
-        Lib:Notify("World 3", "Die Route läuft bereits.", 2, "info")
+        Lib:Notify("World 3", "The route is already running.", 2, "info")
         return
     end
 
@@ -835,17 +1145,18 @@ local function runWorld3(forceRun)
         world3.running = false
 
         if ok then
-            world3.status = world3.auto and "Nächster Orbit" or "Bereit"
-            world3.point = world3.auto and "Spawn" or "Abgeschlossen"
+            world3.status = world3.auto and "Next run" or "Ready"
+            world3.point = world3.auto and "Spawn" or "Complete"
         else
             local message = cleanError(failure)
+            world3.voidRecoveryPending = false
 
-            if not string.find(message, "Gestoppt", 1, true) then
-                world3.status = "Fehler: " .. message
+            if not string.find(message, "Stopped", 1, true) then
+                world3.status = "Error: " .. message
                 world3.auto = false
                 Lib:Notify("World 3", message, 4, "error")
             else
-                world3.status = "Gestoppt"
+                world3.status = "Stopped"
                 world3.point = "-"
             end
         end
@@ -855,712 +1166,315 @@ end
 local function stopWorld3()
     world3.auto = false
     world3.runToken = world3.runToken + 1
-    world3.status = "Gestoppt"
+    world3.voidRecoveryPending = false
+    world3.status = "Stopped"
     world3.point = "-"
     stopRoot()
 end
 
-local queueTeleport = queue_on_teleport
-    or queueonteleport
-    or (syn and syn.queue_on_teleport)
-
-local bbno = {
-    auto = game.PlaceId == BBNO_PLACE_ID
-        and game.PrivateServerId ~= "",
-    autoJoin = readBbnoAutoJoin(
-        game.PlaceId == BBNO_PLACE_ID
-            or game.PlaceId == BBNO_LOBBY_PLACE_ID
-    ),
-    joining = false,
-    joinAttemptAt = 0,
+local events = {
+    enabled = { summer = false, battle = false, disco = false },
+    retry = { summer = 2, battle = 2, disco = 2 },
+    retryAt = setmetatable({}, { __mode = "k" }),
+    counts = { summer = 0, battle = 0, disco = 0, total = 0 },
+    status = "Ready",
+    current = "-",
     running = false,
-    speed = 300,
-    status = "Bereit",
-    stage = "Spawn",
-    cycles = 0,
-    earned = 0,
-    recoveries = 0,
-    lastRewardAt = nil,
-    runToken = 0
+    runToken = 0,
+    homePosition = nil,
+    atHome = true
 }
 
-if (game.PlaceId == BBNO_PLACE_ID or game.PlaceId == BBNO_LOBBY_PLACE_ID)
-    and (not isfile or not isfile(BBNO_AUTOJOIN_PREF))
-then
-    writeBbnoAutoJoin(bbno.autoJoin)
+local function anyEventEnabled()
+    return events.enabled.summer
+        or events.enabled.battle
+        or events.enabled.disco
 end
 
-if game.PlaceId == BBNO_PLACE_ID then
-    if type(queueTeleport) == "function" then
-        local bootstrap = string.format([=[
-if _G.CelestialBbnoRejoinBootstrap then return end
-_G.CelestialBbnoRejoinBootstrap = true
-repeat task.wait(1) until game:IsLoaded()
-
-local enabled = true
-if isfile and readfile and isfile(%q) then
-    local ok, value = pcall(readfile, %q)
-    enabled = not ok or tostring(value) == "true"
-end
-
-if enabled and game.PlaceId == %d then
-    task.wait(3)
-    local service = game:GetService("TeleportService")
-    local player = game:GetService("Players").LocalPlayer
-
-    for _ = 1, 12 do
-        pcall(function()
-            service:Teleport(%d, player)
-        end)
-        task.wait(10)
-    end
-end
-]=], BBNO_AUTOJOIN_PREF, BBNO_AUTOJOIN_PREF, BBNO_LOBBY_PLACE_ID, BBNO_PLACE_ID)
-
-        pcall(queueTeleport, bootstrap)
-    end
-end
-
-local BBNO_FINAL_DEFAULT = Vector3.new(
-    112.16692352294922,
-    811.8273315429688,
-    960.5953369140625
-)
-local BBNO_WALK_DEFAULT = Vector3.new(93.43, 812.03, 937.55)
-local BBNO_STAGE2 = Vector3.new(142.8027, 59.5576, -235.4966)
-local BBNO_CONFIG_PATH = "cash_farm_routes.json"
-local BBNO_REWARD_INTERVAL_MS = 3050
-local BBNO_READY_DELAY_MS = 450
-local BBNO_SPRINT_TIME = 0.25
-local BBNO_SPRINT_LEAD = 0.08
-local bbnoFinal = BBNO_FINAL_DEFAULT
-local bbnoWalk = BBNO_WALK_DEFAULT
-local bbnoDirection = Vector3.zAxis
-local bbnoRemote
-
-local function tableToVector(value, fallback)
-    if type(value) ~= "table"
-        or type(value.x) ~= "number"
-        or type(value.y) ~= "number"
-        or type(value.z) ~= "number"
-    then
-        return fallback
-    end
-
-    return Vector3.new(value.x, value.y, value.z)
-end
-
-local function loadBbnoRoute()
-    local ok, decoded = pcall(function()
-        if not isfile(BBNO_CONFIG_PATH) then
-            return nil
-        end
-
-        return HttpService:JSONDecode(readfile(BBNO_CONFIG_PATH))
-    end)
-
-    if ok and type(decoded) == "table"
-        and type(decoded.worlds) == "table"
-    then
-        local route = decoded.worlds[tostring(BBNO_PLACE_ID)]
-
-        if type(route) == "table" then
-            bbnoFinal = tableToVector(
-                route.teleportPoint,
-                BBNO_FINAL_DEFAULT
-            )
-            bbnoWalk = tableToVector(route.walkPoint, BBNO_WALK_DEFAULT)
-        end
-    end
-
-    local offset = bbnoWalk - bbnoFinal
-    local horizontal = Vector3.new(offset.X, 0, offset.Z)
-
-    bbnoDirection = horizontal.Magnitude > 0
-        and horizontal.Unit
-        or Vector3.zAxis
-end
-
-loadBbnoRoute()
-
-local function getBbnoRemote()
-    if bbnoRemote and bbnoRemote.Parent then
-        return bbnoRemote
-    end
-
-    local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-    bbnoRemote = remotes
-        and remotes:FindFirstChild("RequestCheckpointTp")
-
-    return bbnoRemote
-end
-
-local function bbnoMayContinue(forceRun, token)
-    return generation == _G.CelestialFarmGeneration
-        and token == bbno.runToken
-        and (forceRun or bbno.auto)
-end
-
-local function waitForBbnoStage2(root, forceRun, token, remote)
-    local startedAt = tick()
-    local initialPosition = root.Position
-    local lastPosition = root.Position
-    local lastMovementAt = startedAt
-    local lastRequestAt = startedAt
-
-    while tick() - startedAt < 6 do
-        local currentRoot = getRoot()
-
-        if currentRoot and (currentRoot ~= root or not root.Parent) then
-            root = currentRoot
-            lastPosition = root.Position
-            lastMovementAt = tick()
-            bbno.status = "Stage 2 wird geladen"
-        elseif not currentRoot then
-            task.wait(POLL_TICK)
-        end
-
-        if currentRoot then
-            stopPart(root)
-
-            if not bbnoMayContinue(forceRun, token) then
-                return false
-            end
-
-            local currentPosition = root.Position
-
-            if (currentPosition - lastPosition).Magnitude > 1 then
-                lastPosition = currentPosition
-                lastMovementAt = tick()
-            end
-
-            local atKnownStage = (
-                currentPosition - BBNO_STAGE2
-            ).Magnitude < 150
-            local serverMovedFar = (
-                currentPosition - initialPosition
-            ).Magnitude >= 250
-            local atStage2 = atKnownStage or serverMovedFar
-
-            if not atStage2 and tick() - lastRequestAt >= 1.2 then
-                bbno.status = "Stage 2 wird erneut angefragt"
-                remote:FireServer(1, "wins")
-                lastRequestAt = tick()
-            end
-
-            if tick() - startedAt >= 0.8
-                and tick() - lastMovementAt >= 0.25
-                and atStage2
-            then
-                stopPart(root)
-                return true, root
-            end
-        end
-
-        task.wait(POLL_TICK)
-    end
-
-    return false, nil, "Stage 2 wurde nicht bestätigt"
-end
-
-local function moveBbnoFinal(root, forceRun, token)
-    for attempt = 1, 3 do
-        if not bbnoMayContinue(forceRun, token) then
-            return false
-        elseif root ~= getRoot() or not root.Parent then
-            return false, "Reset beim Final-Transfer"
-        end
-
-        bbno.status = attempt == 1
-            and "Direkt zur Final Stage"
-            or string.format("Final Stage: Versuch %d/3", attempt)
-        stopPart(root)
-        root.Position = bbnoFinal
-        task.wait(0.12)
-
-        local currentRoot = getRoot()
-
-        if currentRoot ~= root or not root.Parent then
-            return false, "Reset beim Final-Transfer"
-        elseif (root.Position - bbnoFinal).Magnitude <= 20 then
-            task.wait(0.08)
-
-            if root == getRoot()
-                and root.Parent
-                and (root.Position - bbnoFinal).Magnitude <= 20
-            then
-                return true
-            end
-        end
-    end
-
-    stopRoot()
-    return false, "Final Stage wurde nicht bestätigt"
-end
-
-local function sprintBbnoReward(
-    root,
-    cashValue,
-    cashBefore,
-    forceRun,
-    token
-)
-    local startedAt = tick()
-
-    while tick() - startedAt < BBNO_SPRINT_TIME do
-        if cashValue.Value ~= cashBefore then
-            stopRoot()
-            return cashDelta(cashValue.Value, cashBefore), tick()
-        elseif not bbnoMayContinue(forceRun, token) then
-            stopRoot()
-            return nil, nil
-        elseif (root.Position - bbnoFinal).Magnitude > 150 then
-            stopRoot()
-            return nil, nil
-        end
-
-        root.AssemblyLinearVelocity = Vector3.new(
-            bbnoDirection.X * bbno.speed,
-            0,
-            bbnoDirection.Z * bbno.speed
-        )
-        task.wait(MOTION_TICK)
-    end
-
-    stopRoot()
-    return nil, nil
-end
-
-local function waitForBbnoReward(
-    cashValue,
-    cashBefore,
-    forceRun,
-    token,
-    timeout
-)
-    local startedAt = tick()
-    stopRoot()
-
-    while tick() - startedAt < timeout do
-        if cashValue.Value ~= cashBefore then
-            return cashDelta(cashValue.Value, cashBefore)
-        elseif not bbnoMayContinue(forceRun, token) then
-            return nil
-        end
-
-        task.wait(POLL_TICK)
-    end
-
-    return nil
-end
-
-local function runBbnoCycle(forceRun, token)
-    local root = getRoot()
-    local cashValue = getCash()
-    local remote = getBbnoRemote()
-
-    assert(root, "Charakter nicht verfügbar")
-    assert(cashValue, "Cash-Wert nicht verfügbar")
-    assert(remote, "Checkpoint-Remote nicht verfügbar")
-
-    local cashBefore = cashValue.Value
-
-    bbno.status = "Stage 2"
-    bbno.stage = "1/3  Checkpoint"
-    remote:FireServer(1, "wins")
-
-    local stageReady, stageRoot, stageError = waitForBbnoStage2(
-        root,
-        forceRun,
-        token,
-        remote
-    )
-
-    if not stageReady then
-        assert(bbnoMayContinue(forceRun, token), "Gestoppt")
-        error(stageError or "Stage 2 wurde nicht bestätigt")
-    end
-
-    root = stageRoot
-
-    task.wait(0.15)
-    assert(bbnoMayContinue(forceRun, token), "Gestoppt")
-
-    bbno.status = "Final Stage"
-    bbno.stage = "2/3  Final"
-
-    local finalReady, finalError = moveBbnoFinal(
-        root,
-        forceRun,
-        token
-    )
-
-    if not finalReady then
-        assert(bbnoMayContinue(forceRun, token), "Gestoppt")
-        error(finalError or "Final Stage wurde nicht bestätigt")
-    end
-
-    local sprintDeadline = bbno.lastRewardAt
-        and bbno.lastRewardAt
-            + BBNO_REWARD_INTERVAL_MS / 1000
-            - BBNO_SPRINT_LEAD
-        or nil
-    local readyAt = tick() + BBNO_READY_DELAY_MS / 1000
-
-    if sprintDeadline then
-        readyAt = math.min(readyAt, sprintDeadline)
-    end
-
-    bbno.status = "Bereit für Reward"
-    stopRoot()
-
-    while tick() < readyAt do
-        assert(bbnoMayContinue(forceRun, token), "Gestoppt")
-        task.wait(POLL_TICK)
-    end
-
-    if sprintDeadline and tick() < sprintDeadline then
-        bbno.status = "Reward Cooldown"
-        stopRoot()
-
-        while tick() < sprintDeadline do
-            assert(bbnoMayContinue(forceRun, token), "Gestoppt")
-            task.wait(POLL_TICK)
-        end
-    end
-
-    bbno.status = "Reward Sprint"
-    bbno.stage = "3/3  Reward"
-
-    local difference, rewardAt = sprintBbnoReward(
-        root,
-        cashValue,
-        cashBefore,
-        forceRun,
-        token
-    )
-
-    if not difference then
-        difference = waitForBbnoReward(
-            cashValue,
-            cashBefore,
-            forceRun,
-            token,
-            0.8
-        )
-
-        if difference then
-            rewardAt = tick()
-        end
-    end
-
-    if not difference and bbnoMayContinue(forceRun, token) then
-        bbno.status = "Reward wird erneut versucht"
-
-        local recovered, recoveryError = moveBbnoFinal(
-            root,
-            forceRun,
-            token
-        )
-
-        if recovered then
-            task.wait(0.25)
-            difference, rewardAt = sprintBbnoReward(
-                root,
-                cashValue,
-                cashBefore,
-                forceRun,
-                token
-            )
-
-            if not difference then
-                difference = waitForBbnoReward(
-                    cashValue,
-                    cashBefore,
-                    forceRun,
-                    token,
-                    1.2
-                )
-
-                if difference then
-                    rewardAt = tick()
-                end
-            end
-        elseif recoveryError == "Reset beim Final-Transfer" then
-            error(recoveryError)
-        end
-    end
-
-    if not difference then
-        assert(bbnoMayContinue(forceRun, token), "Gestoppt")
-        error("Reward wurde nicht erkannt")
-    end
-
-    bbno.lastRewardAt = rewardAt or tick()
-    bbno.cycles = bbno.cycles + 1
-    bbno.earned = bbno.earned + difference
-    bbno.recoveries = 0
-    bbno.status = "Reward bestätigt"
-    bbno.stage = "Abgeschlossen"
-
-    Lib:Notify(
-        "BBNO$",
-        "+" .. formatNumber(difference) .. " Cash",
-        2,
-        "success"
-    )
-end
-
-local function joinBbno(forceJoin)
-    if game.PlaceId == BBNO_PLACE_ID then
+local function eventConfirmed(model, kind)
+    if not model.Parent then
         return true
-    elseif game.PlaceId ~= BBNO_LOBBY_PLACE_ID then
-        if forceJoin then
-            Lib:Notify(
-                "BBNO$",
-                "Auto Rejoin ist nur aus der World-1-Lobby verfügbar.",
-                3,
-                "warning"
-            )
-        end
-
-        return false
-    elseif not forceJoin and not bbno.autoJoin then
-        return false
-    elseif bbno.joining and tick() - bbno.joinAttemptAt < 10 then
-        return false
     end
 
-    bbno.joining = true
-    bbno.joinAttemptAt = tick()
-    bbno.status = "Verbinde mit BBNO$ World"
-    bbno.stage = "Auto Rejoin"
-
-    local ok, failure = pcall(function()
-        TeleportService:Teleport(BBNO_PLACE_ID, player)
-    end)
-
-    if not ok then
-        bbno.joining = false
-        bbno.status = "Rejoin fehlgeschlagen"
-
-        if forceJoin then
-            Lib:Notify("BBNO$", cleanError(failure), 4, "error")
-        end
-    end
-
-    return ok
-end
-
-local teleportInitFailed
-pcall(function()
-    teleportInitFailed = TeleportService.TeleportInitFailed
-end)
-
-if teleportInitFailed then
-    pcall(function()
-        teleportInitFailed:Connect(function(
-            failedPlayer,
-            _,
-            errorMessage,
-            placeId
-        )
-            if generation ~= _G.CelestialFarmGeneration
-                or failedPlayer ~= player
-                or placeId ~= BBNO_PLACE_ID
-            then
-                return
-            end
-
-            bbno.joining = false
-            bbno.status = "Rejoin fehlgeschlagen"
-            Lib:Notify(
-                "BBNO$ Auto Rejoin",
-                tostring(errorMessage or "Teleport nicht verfügbar"),
-                4,
-                "error"
-            )
-        end)
-    end)
-end
-
-local function runBbno(forceRun)
-    if game.PlaceId ~= BBNO_PLACE_ID then
-        joinBbno(forceRun)
-        return
-    elseif bbno.running then
-        Lib:Notify("BBNO$", "Die Farm läuft bereits.", 2, "info")
-        return
-    end
-
-    bbno.running = true
-    bbno.runToken = bbno.runToken + 1
-    local token = bbno.runToken
-
-    task.spawn(function()
-        local ok, failure = pcall(function()
-            repeat
-                runBbnoCycle(forceRun, token)
-            until forceRun or not bbnoMayContinue(false, token)
+    if kind == "disco" then
+        local ok, collected = pcall(function()
+            return model:GetAttribute("Collected")
         end)
 
-        if generation == _G.CelestialFarmGeneration
-            and token == bbno.runToken
-        then
-            stopRoot()
-        end
-        bbno.running = false
-
-        if ok then
-            bbno.status = bbno.auto and "Nächster Orbit" or "Bereit"
-            bbno.stage = bbno.auto and "Spawn" or "Abgeschlossen"
-        else
-            local message = cleanError(failure)
-            local recoverable = string.find(
-                message,
-                "Reset beim Final-Transfer",
-                1,
-                true
-            ) or string.find(
-                message,
-                "Stage 2 wurde nicht bestätigt",
-                1,
-                true
-            ) or string.find(
-                message,
-                "Final Stage wurde nicht bestätigt",
-                1,
-                true
-            )
-
-            if recoverable and bbno.auto then
-                bbno.recoveries = bbno.recoveries + 1
-
-                if bbno.recoveries >= 3 then
-                    bbno.auto = false
-                    bbno.status = "Server blockiert Final-Transfer"
-                    bbno.stage = "Sicherheitsstopp"
-                    Lib:Notify(
-                        "BBNO$",
-                        "Final-Transfer wurde dreimal blockiert.",
-                        5,
-                        "error"
-                    )
-                else
-                    bbno.running = true
-                    bbno.status = "Respawn erkannt, neuer Versuch"
-                    bbno.stage = "Recovery"
-                    task.wait(1.5)
-                    bbno.running = false
-                end
-            elseif not string.find(message, "Gestoppt", 1, true) then
-                bbno.status = "Fehler: " .. message
-                bbno.auto = false
-                Lib:Notify("BBNO$", message, 4, "error")
-            else
-                bbno.status = "Gestoppt"
-                bbno.stage = "-"
-            end
-        end
-    end)
-end
-
-local function stopBbno()
-    bbno.auto = false
-    bbno.runToken = bbno.runToken + 1
-    bbno.status = "Gestoppt"
-    bbno.stage = "-"
-    stopRoot()
-end
-
-local function findNearestSummerCoin()
-    local folder = workspace:FindFirstChild("SummerCoinsLocal")
-    local root = getRoot()
-
-    if not folder or not root then
-        return nil, nil
-    end
-
-    local nearestModel
-    local nearestPart
-    local nearestDistance = math.huge
-
-    for _, model in ipairs(folder:GetChildren()) do
-        if model:IsA("Model")
-            and model.Name == "SummerCoin"
-            and not summerCoins.visited[model]
-        then
-            local coin = model:FindFirstChild("Coin", true)
-
-            if coin and coin:IsA("BasePart") then
-                local distance = (coin.Position - root.Position).Magnitude
-
-                if distance < nearestDistance then
-                    nearestModel = model
-                    nearestPart = coin
-                    nearestDistance = distance
-                end
-            end
-        end
-    end
-
-    return nearestModel, nearestPart
-end
-
-local function hasActiveSummerCoins()
-    local folder = workspace:FindFirstChild("SummerCoinsLocal")
-
-    if not folder then
-        return false
-    end
-
-    for _, model in ipairs(folder:GetChildren()) do
-        if model:IsA("Model")
-            and model.Name == "SummerCoin"
-            and model:FindFirstChild("Coin", true)
-        then
-            return true
-        end
+        return ok and collected == true
     end
 
     return false
 end
 
-local function collectNearestSummerCoin()
-    local model, coin = findNearestSummerCoin()
+local function findNearestEventTarget()
+    local root = getRoot()
 
-    if not model or not coin then
-        return false
+    if not root then
+        return nil
+    end
+
+    local nearest
+    local nearestDistance = math.huge
+    local now = tick()
+    local function consider(kind, model, part, id)
+        if part and part:IsA("BasePart")
+            and model.Parent
+            and (events.retryAt[model] or 0) <= now
+        then
+            local distance = (part.Position - root.Position).Magnitude
+
+            if distance < nearestDistance then
+                nearest = {
+                    kind = kind,
+                    model = model,
+                    part = part,
+                    id = id
+                }
+                nearestDistance = distance
+            end
+        end
+    end
+
+    if events.enabled.summer then
+        local folder = workspace:FindFirstChild("SummerCoinsLocal")
+
+        if folder then
+            for _, model in ipairs(folder:GetChildren()) do
+                if model:IsA("Model") and model.Name == "SummerCoin" then
+                    local coin = model:FindFirstChild("Coin", true)
+                    if coin and coin:IsA("BasePart") then
+                        consider("summer", model, coin)
+                    end
+                end
+            end
+        end
+    end
+
+    if events.enabled.battle then
+        local folder = workspace:FindFirstChild("CoinBattleCoinsLocal")
+
+        if folder then
+            for _, model in ipairs(folder:GetChildren()) do
+                if model:IsA("Model") then
+                    local rawId = string.match(model.Name, "^CoinBattleCoin_(.+)$")
+                        or string.match(model.Name, "^Coin_(.+)$")
+
+                    if rawId then
+                        local part = model:FindFirstChild("CoinPart", true)
+                            or model:FindFirstChild("Coin", true)
+                            or model.PrimaryPart
+                            or model:FindFirstChildWhichIsA("BasePart", true)
+
+                        consider("battle", model, part, rawId)
+                    end
+                end
+            end
+        end
+    end
+
+    if events.enabled.disco then
+        local folder = workspace:FindFirstChild("SpecialKeys")
+
+        if folder then
+            for _, object in ipairs(folder:GetChildren()) do
+                local ok, isDisco = pcall(function()
+                    return object:GetAttribute("IsDiscoKey")
+                end)
+
+                if ok and isDisco == true then
+                    local part = object:IsA("BasePart") and object
+                        or object:FindFirstChildWhichIsA("BasePart", true)
+
+                    consider("disco", object, part)
+                end
+            end
+        end
+    end
+
+    return nearest
+end
+
+local function returnFromEvents()
+    if game.PlaceId == WORLD3_PLACE_ID then
+        local moved = returnToWorld3Spawn()
+
+        if moved then
+            events.atHome = true
+            events.current = "-"
+        end
+
+        return moved
     end
 
     local root = getRoot()
 
-    if not root then
-        summerCoins.status = "Charakter nicht verfügbar"
+    if not root or not events.homePosition then
         return false
     end
 
-    summerCoins.visited[model] = true
-    summerCoins.returnedToSpawn = false
-    summerCoins.status = "Sammelt Summer Coin"
-    stopPart(root)
-    root.Position = coin.Position + Vector3.new(0, 3, 0)
-    task.wait(0.5)
+    local moved = pcall(function()
+        stopPart(root)
+        root.Position = events.homePosition
+        stopPart(root)
+    end)
 
-    if not model.Parent then
-        summerCoins.collected = summerCoins.collected + 1
-        summerCoins.status = "Coin eingesammelt"
-    else
-        summerCoins.status = "Coin nicht bestätigt"
-        task.spawn(function()
-            task.wait(1.5)
-            if model.Parent then
-                summerCoins.visited[model] = nil
+    if moved then
+        events.atHome = true
+        events.current = "-"
+    end
+
+    return moved
+end
+
+local function collectEventTarget(target, token)
+    local root = getRoot()
+
+    if not root or not target.part.Parent then
+        return false
+    end
+
+    if not events.homePosition then
+        events.homePosition = root.Position
+    end
+
+    events.atHome = false
+    events.current = target.kind == "summer" and "Summer Coin"
+        or target.kind == "battle" and "Coin Battle"
+        or "Disco Keycap"
+    events.status = "Collecting " .. events.current
+
+    pcall(function()
+        stopPart(root)
+        root.Position = target.part.Position + Vector3.new(0, 3, 0)
+    end)
+
+    if target.kind == "battle" and target.id ~= nil then
+        pcall(function()
+            local admin = ReplicatedStorage:FindFirstChild("AdminAbuse")
+            local remotes = admin and admin:FindFirstChild("Remotes")
+            local remote = remotes and remotes:FindFirstChild(
+                "CoinBattleCollect"
+            )
+
+            if remote and remote:IsA("RemoteEvent") then
+                remote:FireServer(target.id)
             end
         end)
     end
 
-    return true
+    local deadline = tick() + 1
+
+    while tick() < deadline
+        and generation == _G.CelestialFarmGeneration
+        and token == events.runToken
+        and events.enabled[target.kind]
+    do
+        if eventConfirmed(target.model, target.kind) then
+            events.counts[target.kind] = events.counts[target.kind] + 1
+            events.counts.total = events.counts.total + 1
+            events.retryAt[target.model] = nil
+            events.status = events.current .. " confirmed"
+            return true
+        end
+
+        task.wait(POLL_TICK)
+    end
+
+    if generation == _G.CelestialFarmGeneration
+        and token == events.runToken
+        and events.enabled[target.kind]
+        and eventConfirmed(target.model, target.kind)
+    then
+        events.counts[target.kind] = events.counts[target.kind] + 1
+        events.counts.total = events.counts.total + 1
+        events.retryAt[target.model] = nil
+        events.status = events.current .. " confirmed"
+        return true
+    end
+
+    if target.model.Parent
+        and events.enabled[target.kind]
+    then
+        events.retryAt[target.model] = tick() + events.retry[target.kind]
+        events.status = string.format(
+            "%s not confirmed, retrying in %.1fs",
+            events.current,
+            events.retry[target.kind]
+        )
+    end
+
+    return false
+end
+
+local function runEventStep()
+    if events.busy or not anyEventEnabled() then
+        return
+    end
+
+    events.busy = true
+    events.running = true
+    local token = events.runToken
+    local ok, failure = pcall(function()
+        events.status = "Scanning event targets"
+        local target = findNearestEventTarget()
+
+        if target then
+            collectEventTarget(target, token)
+        elseif not events.atHome then
+            events.status = "No targets, returning"
+            returnFromEvents()
+        else
+            events.status = "Waiting for event targets"
+        end
+    end)
+    events.busy = false
+
+    if not ok and token == events.runToken then
+        events.enabled.summer = false
+        events.enabled.battle = false
+        events.enabled.disco = false
+        world3.eventsActive = false
+        events.running = false
+        events.status = "Error: " .. cleanError(failure)
+        Lib:Notify("Events", cleanError(failure), 4, "error")
+    end
+end
+
+local function setEventEnabled(kind, enabled)
+    local wasActive = anyEventEnabled()
+    events.enabled[kind] = enabled == true
+
+    if enabled then
+        stopWorld3()
+        world3.eventsActive = true
+
+        if not wasActive then
+            events.runToken = events.runToken + 1
+            events.homePosition = nil
+            events.atHome = true
+            events.status = "Event search started"
+            events.running = true
+        end
+    elseif not anyEventEnabled() then
+        world3.eventsActive = false
+        events.runToken = events.runToken + 1
+        events.running = false
+        events.status = "Stopped"
+        events.returnPending = true
+    end
+end
+
+local function stopEvents()
+    events.enabled.summer = false
+    events.enabled.battle = false
+    events.enabled.disco = false
+    world3.eventsActive = false
+    events.runToken = events.runToken + 1
+    events.running = false
+    events.status = "Stopped"
+    returnFromEvents()
+    stopRoot()
 end
 
 returnToWorld3Spawn = function()
@@ -1577,10 +1491,11 @@ returnToWorld3Spawn = function()
     for attempt = 1, 6 do
         local root = getRoot()
 
-        summerCoins.status = string.format(
-            "Spawn TP %d/6",
+        world3.status = string.format(
+            "World-3-Spawn TP %d/6",
             attempt
         )
+        world3.point = "Recovery"
 
         if root then
             stopPart(root)
@@ -1602,8 +1517,8 @@ returnToWorld3Spawn = function()
                 if atSpawn then
                     stopPart(root)
                     world3.spawnPosition = position
-                    summerCoins.returnedToSpawn = true
-                    summerCoins.status = "Zurück am Spawn"
+                    world3.status = "Back at World 3 spawn"
+                    world3.point = "Spawn"
                     return true
                 end
             end
@@ -1613,82 +1528,15 @@ returnToWorld3Spawn = function()
     end
 
     stopRoot()
-    summerCoins.returnedToSpawn = false
-    summerCoins.status = "Spawn TP wurde korrigiert"
+    world3.status = "World 3 spawn teleport corrected"
+    world3.point = "Recovery"
     return false
-end
-
-collectWorld3SummerCoins = function(forceRun, token)
-    summerCoins.status = "Scannt Summer Coins"
-    world3.status = "Scannt Summer Coins"
-    world3.point = "Summer Coins"
-    local deadline = tick() + 20
-
-    while world3MayContinue(forceRun, token)
-        and world3.collectSummerCoins
-        and tick() < deadline
-    do
-        if not collectNearestSummerCoin() then
-            if not hasActiveSummerCoins() then
-                break
-            end
-
-            task.wait(0.1)
-        end
-    end
-
-    assert(world3MayContinue(forceRun, token), "Gestoppt")
-    assert(returnToWorld3Spawn(), "Spawn-Teleport wurde korrigiert")
-    world3.status = "Summer Coins abgeschlossen"
-    world3.point = "Spawn"
-end
-
-local function startSummerCoins()
-    if summerCoins.running then
-        return
-    end
-
-    stopWorld3()
-    stopBbno()
-    summerCoins.auto = true
-    summerCoins.running = true
-
-    task.spawn(function()
-        while generation == _G.CelestialFarmGeneration
-            and summerCoins.auto
-        do
-            if not collectNearestSummerCoin() then
-                if hasActiveSummerCoins() then
-                    summerCoins.status = "Wartet auf Coin-Bestätigung"
-                else
-                    if not summerCoins.returnedToSpawn then
-                        if not returnToWorld3Spawn() then
-                            summerCoins.status = "Spawn TP wurde korrigiert"
-                        end
-                    end
-
-                    if summerCoins.returnedToSpawn then
-                        summerCoins.status = "Wartet am Spawn"
-                    end
-                end
-                task.wait(0.1)
-            end
-        end
-
-        summerCoins.running = false
-    end)
-end
-
-local function stopSummerCoins()
-    summerCoins.auto = false
-    summerCoins.status = "Gestoppt"
-    stopRoot()
 end
 
 local window = Lib:CreateWindow({
     title = "CELESTIAL",
     subtitle = "",
-    size = Vector2.new(660, 545),
+    size = Vector2.new(500, 350),
     menuKey = "delete",
     configName = "orbit",
     configFolder = "celestial_farm",
@@ -1714,6 +1562,7 @@ local window = Lib:CreateWindow({
     checkboxStyle = true,
     railOnly = false,
     skeetMode = true,
+    compactSkeet = true,
     searchStyle = "off",
     lockChrome = true,
     smartFps = true,
@@ -1726,14 +1575,14 @@ local window = Lib:CreateWindow({
 _G.CelestialFarmUI = window
 Lib:SetLayout("side")
 
-Lib:Category("ORBITS")
+Lib:Category("FARM")
 local world3Tab = window:Tab("World 3", "target")
 local world3Control = world3Tab:Section(
-    "World 3 Orbit",
+    "World 3 Farm",
     "Left"
 )
 local world3Live = world3Tab:Section(
-    "Live Orbit",
+    "Live",
     "Right"
 )
 
@@ -1750,48 +1599,55 @@ world3AutoHandle = world3Control:Toggle(
         end
     end
 )
+world3AutoHandle:AddSettings({
+    {
+        type = "dropdown",
+        label = "Route",
+        value = "Stage 1",
+        choices = { "Stage 1", "Stage 5", "Stage 6", "Stage 7" },
+        legacyOptionKeys = {
+            "World 3.World 3 Orbit.Auto Farm.settings.Route",
+            "World 3.World 3 Orbit.Auto Farm.settings.Stage 5 Route"
+        },
+        legacyKey = "World 3.World 3 Orbit.Route",
+        deserialize = function(value)
+            if type(value) == "table" then
+                return value[1]
+            elseif type(value) == "boolean" then
+                return value and "Stage 5" or "Stage 1"
+            end
 
-world3Control:Toggle(
-    "Collect Summer Coins",
-    false,
-    function(enabled)
-        world3.collectSummerCoins = enabled == true
-    end
-)
-
-world3Control:Dropdown(
-    "Route",
-    "Stage 1",
-    { "Stage 1", "Stage 5" },
-    false,
-    function(value)
-        local selected = type(value) == "table" and value[1] or value
-
-        if selected == "Stage 1 Event" then
-            selected = "Stage 1"
-        elseif selected == "WinBlock35" then
-            selected = "Stage 5"
+            return value
+        end,
+        callback = function(value)
+            world3.route = value
         end
-
-        if type(value) == "table" then
-            value[1] = selected
+    },
+    {
+        type = "slider",
+        label = "Speed",
+        value = 300,
+        min = 50,
+        max = 1000,
+        step = 10,
+        suffix = " studs/s",
+        legacyOptionKeys = {
+            "World 3.World 3 Orbit.Auto Farm.settings.Geschwindigkeit"
+        },
+        legacyKey = "World 3.World 3 Orbit.Speed",
+        callback = function(value)
+            world3.speed = value
         end
-
-        world3.route = selected
-    end
-)
-
-world3Control:Slider(
-    "Speed",
-    300,
-    10,
-    50,
-    1000,
-    " studs/s",
-    function(value)
-        world3.speed = value
-    end
-)
+    },
+    {
+        type = "toggle",
+        label = "Void recovery",
+        value = true,
+        callback = function(enabled)
+            world3.autoVoidRecovery = enabled == true
+        end
+    }
+})
 
 world3Control:Button("Run", function()
     runWorld3(true)
@@ -1810,146 +1666,189 @@ world3Live:Label(function()
     return "Position: " .. world3.point
 end)
 world3Live:Label(function()
-    return "Orbits: " .. tostring(world3.cycles)
+    return "Runs: " .. tostring(world3.cycles)
 end)
 world3Live:Label(function()
-    return "Letzte Wins: " .. formatNumber(world3.lastReward)
+    return "Last Wins: " .. formatNumber(world3.lastReward)
+end)
+world3Live:Label(function()
+    return "Void recoveries: " .. tostring(world3.voidRecoveries)
 end)
 
-local bbnoTab = window:Tab("BBNO$", "rocket")
-local bbnoControl = bbnoTab:Section(
-    "BBNO$ Orbit",
+local eventsTab = window:Tab("Events", "star")
+local eventsControl = eventsTab:Section(
+    "Event Collectors",
     "Left"
 )
-local bbnoLive = bbnoTab:Section(
-    "Live Orbit",
-    "Right"
-)
-
-local bbnoAutoHandle
-
-bbnoAutoHandle = bbnoControl:Toggle(
-    "Auto Farm",
-    bbno.auto,
-    function(enabled)
-        bbno.auto = enabled == true
-
-        if not bbno.auto then
-            stopBbno()
-        end
-    end
-)
-
-bbnoControl:Slider(
-    "Speed",
-    300,
-    10,
-    100,
-    400,
-    " studs/s",
-    function(value)
-        bbno.speed = value
-    end
-)
-
-bbnoControl:Toggle(
-    "Auto Rejoin",
-    bbno.autoJoin,
-    function(enabled)
-        bbno.autoJoin = enabled == true
-        writeBbnoAutoJoin(bbno.autoJoin)
-    end
-)
-
-bbnoControl:Button("Run", function()
-    runBbno(true)
-end):AddButton("Join", function()
-    joinBbno(true)
-end):AddButton("Stop", function()
-    stopBbno()
-
-    if bbnoAutoHandle:Get() then
-        bbnoAutoHandle:Set(false)
-    end
-end)
-
-bbnoLive:Label(function()
-    return "Status: " .. bbno.status
-end)
-bbnoLive:Label(function()
-    return "Phase: " .. bbno.stage
-end)
-bbnoLive:Label(function()
-    return bbno.autoJoin and "Rejoin: On" or "Rejoin: Off"
-end)
-bbnoLive:Label(function()
-    return "Orbits: " .. tostring(bbno.cycles)
-end)
-bbnoLive:Label(function()
-    return "Verdient: " .. formatNumber(bbno.earned)
-end)
-
-local summerTab = window:Tab("Summer Coins", "star")
-local summerControl = summerTab:Section(
-    "Summer Coin Collector",
-    "Left"
-)
-local summerLive = summerTab:Section(
+local eventsLive = eventsTab:Section(
     "Live",
     "Right"
 )
+local eventHandles = {}
 
-local summerAutoHandle
-
-summerAutoHandle = summerControl:Toggle(
-    "Auto Collect",
+eventHandles.summer = eventsControl:Toggle(
+    "Summer Coins",
     false,
     function(enabled)
-        if enabled then
-            startSummerCoins()
-        else
-            stopSummerCoins()
-        end
+        setEventEnabled("summer", enabled)
     end
 )
-
-summerControl:Button("Collect", function()
-    if not collectNearestSummerCoin() then
-        Lib:Notify(
-            "Summer Coins",
-            "Keine aktive Coin gefunden.",
-            3,
-            "info"
-        )
-    end
-end):AddButton("Stop", function()
-    stopSummerCoins()
-
-    if summerAutoHandle:Get() then
-        summerAutoHandle:Set(false)
-    end
-end)
-
-summerLive:Label(function()
-    return "Status: " .. summerCoins.status
-end)
-summerLive:Label(function()
-    local folder = workspace:FindFirstChild("SummerCoinsLocal")
-    local count = 0
-
-    if folder then
-        for _, model in ipairs(folder:GetChildren()) do
-            if model:IsA("Model") and model.Name == "SummerCoin" then
-                count = count + 1
-            end
+eventHandles.summer:AddSettings({
+    {
+        type = "slider",
+        label = "Retry after",
+        value = 2,
+        min = 0.5,
+        max = 10,
+        step = 0.5,
+        suffix = "s",
+        callback = function(value)
+            events.retry.summer = value
         end
+    }
+})
+
+eventHandles.battle = eventsControl:Toggle(
+    "Coin Battle",
+    false,
+    function(enabled)
+        setEventEnabled("battle", enabled)
+    end
+)
+eventHandles.battle:AddSettings({
+    {
+        type = "slider",
+        label = "Retry after",
+        value = 2,
+        min = 0.5,
+        max = 10,
+        step = 0.5,
+        suffix = "s",
+        callback = function(value)
+            events.retry.battle = value
+        end
+    }
+})
+
+eventHandles.disco = eventsControl:Toggle(
+    "Disco Keycaps",
+    false,
+    function(enabled)
+        setEventEnabled("disco", enabled)
+    end
+)
+eventHandles.disco:AddSettings({
+    {
+        type = "slider",
+        label = "Retry after",
+        value = 2,
+        min = 0.5,
+        max = 10,
+        step = 0.5,
+        suffix = "s",
+        callback = function(value)
+            events.retry.disco = value
+        end
+    }
+})
+
+eventsControl:Button("Stop All", function()
+    stopEvents()
+end)
+
+eventsLive:Label(function()
+    return "Status: " .. events.status
+end)
+eventsLive:Label(function()
+    return "Target: " .. events.current
+end)
+eventsLive:Label(function()
+    return "Summer Coins: " .. tostring(events.counts.summer)
+end)
+eventsLive:Label(function()
+    return "Coin Battle: " .. tostring(events.counts.battle)
+end)
+eventsLive:Label(function()
+    return "Disco Keycaps: " .. tostring(events.counts.disco)
+end)
+eventsLive:Label(function()
+    return "Total: " .. tostring(events.counts.total)
+end)
+
+local hudBox = Lib:CreateBox({
+    title = "CELESTIAL HUD",
+    visible = false,
+    x = 18,
+    y = 90,
+    width = 238,
+    statValueX = 92
+})
+
+hudBox:Stat(function()
+    if world3.eventsActive or anyEventEnabled() then
+        return "Mode | Events"
+    elseif world3.running or world3.auto then
+        return "Mode | World 3"
     end
 
-    return "Aktive Coins: " .. tostring(count)
+    return "Mode | Idle"
 end)
-summerLive:Label(function()
-    return "Eingesammelt: " .. tostring(summerCoins.collected)
+
+hudBox:Stat(function()
+    local status = "Ready"
+
+    if world3.eventsActive or anyEventEnabled() then
+        status = events.status
+    elseif world3.running or world3.auto then
+        status = world3.status
+    end
+
+    if string.find(status, "Waiting for event", 1, true) then
+        status = "Waiting"
+    elseif string.find(status, "Scanning event", 1, true) then
+        status = "Scanning"
+    elseif string.find(status, "Collecting ", 1, true) == 1 then
+        status = "Collecting"
+    elseif string.find(status, "not confirmed", 1, true) then
+        status = "Retrying"
+    elseif string.find(status, "No targets", 1, true) then
+        status = "Returning"
+    elseif status == "Event search started" then
+        status = "Starting"
+    elseif #status > 18 then
+        status = string.sub(status, 1, 15) .. "..."
+    end
+
+    return "Status | " .. status
 end)
+
+hudBox:Stat(function()
+    if world3.eventsActive or anyEventEnabled() then
+        return "Collected | " .. tostring(events.counts.total) .. " items"
+    elseif world3.running or world3.auto then
+        return "Earned | " .. formatNumber(world3.earned) .. " Wins"
+    end
+
+    return string.format(
+        "Session | %s Wins / %d items",
+        formatNumber(world3.earned),
+        events.counts.total
+    )
+end)
+
+Lib:Category("SYSTEM")
+local settingsTab = window:Tab("Settings", "cog")
+local hudSettings = settingsTab:Section("HUD", "Full")
+
+hudSettings:Toggle("Activity HUD", false, function(enabled)
+    hudBox:SetVisible(enabled == true)
+end)
+
+hudSettings:Label(
+    "Shows live status and confirmed session earnings."
+)
+
+window:autoloadConfig("orbit")
 
 task.spawn(function()
     while generation == _G.CelestialFarmGeneration do
@@ -1957,27 +1856,22 @@ task.spawn(function()
             world3AutoHandle:Set(world3.auto)
         end
 
-        if bbnoAutoHandle:Get() ~= bbno.auto then
-            bbnoAutoHandle:Set(bbno.auto)
+        for kind, handle in pairs(eventHandles) do
+            if handle:Get() ~= events.enabled[kind] then
+                handle:Set(events.enabled[kind])
+            end
         end
 
-        if summerAutoHandle:Get() ~= summerCoins.auto then
-            summerAutoHandle:Set(summerCoins.auto)
-        end
-
-        if world3.auto and not world3.running then
-            runWorld3(false)
-        end
-
-        if bbno.auto and not bbno.running then
-            runBbno(false)
-        end
-
-        if game.PlaceId == BBNO_LOBBY_PLACE_ID
-            and bbno.autoJoin
-            and tick() - scriptStartedAt >= 3
+        if world3.auto
+            and not world3.running
+            and not world3.eventsActive
         then
-            joinBbno(false)
+            runWorld3(false)
+        elseif anyEventEnabled() then
+            runEventStep()
+        elseif events.returnPending then
+            events.returnPending = false
+            returnFromEvents()
         end
 
         task.wait(0.1)
@@ -1986,7 +1880,7 @@ end)
 
 Lib:Notify(
     "Celestial",
-    "Orbit Farm bereit · ENTF öffnet das Menü",
+    "World 3 and event farm ready · DELETE opens the menu",
     4,
     "success"
 )

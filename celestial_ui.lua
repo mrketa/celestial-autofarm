@@ -264,12 +264,12 @@ local ProjectState = {
     notifications = {},
 
     drag = nil, resizeEdge = nil, sliderDrag = nil, scrollDrag = nil,
-    dropdown = nil, colorpicker = nil, cpDrag = nil, focus = nil,
+    dropdown = nil, colorpicker = nil, featureSettings = nil, cpDrag = nil, focus = nil,
     repeatKey = nil, repeatAt = 0,
     tooltipText = nil, tooltipX = 0, tooltipY = 0, tooltipAt = 0, lastTooltipText = nil,
 
     hoverEffects = true, tooltipsEnabled = true,
-    smartFps = false, checkboxStyle = false, railOnly = false, skeetMode = false,
+    smartFps = false, checkboxStyle = false, railOnly = false, skeetMode = false, compactSkeet = false,
     errorCount = 0,
 }
 local menuKey = "p"
@@ -1053,7 +1053,7 @@ local function applyInputState(force)
     elseif capture and ProjectState.gameInput == "always" then
         capture = false
     elseif capture and ProjectState.gameInput == true then
-        local popup = ProjectState.dropdown or ProjectState.colorpicker or ProjectState.keyMenu or ProjectState.spotlightOpen
+        local popup = ProjectState.dropdown or ProjectState.colorpicker or ProjectState.featureSettings or ProjectState.keyMenu or ProjectState.spotlightOpen
         if not popup and not over(ProjectState.x, ProjectState.y, ProjectState.w, ProjectState.h) then
             capture = false
         end
@@ -1074,7 +1074,7 @@ local function setOpen(open)
     if ProjectState.open == open then return end
     ProjectState.open = open
     ProjectState.drag = nil; ProjectState.resizeEdge = nil; ProjectState.sliderDrag = nil
-    ProjectState.scrollDrag = nil; ProjectState.dropdown = nil; ProjectState.colorpicker = nil
+    ProjectState.scrollDrag = nil; ProjectState.dropdown = nil; ProjectState.colorpicker = nil; ProjectState.featureSettings = nil
     ProjectState.cpDrag = nil; ProjectState.focus = nil; ProjectState.keyMenu = nil
     applyInputState(false)
 end
@@ -1249,6 +1249,13 @@ local function makeItem(section, item)
         function handle:AddColorpicker(label, defaultColor, callback, defaultAlpha)
             item.colorpicker = { label = label or "color", value = defaultColor or Theme.accent,
                                  alpha = defaultAlpha or 1, callback = callback }
+            return handle
+        end
+        function handle:AddSettings(options)
+            item.settings = { title = item.label, options = options or {} }
+            for _, option in ipairs(item.settings.options) do
+                if option.default == nil then option.default = option.value end
+            end
             return handle
         end
     end
@@ -1519,7 +1526,8 @@ function ui:CreateBox(opts)
     ProjectState.boxes = ProjectState.boxes or {}
     local box = { title = tostring(opts.title or "Box"), lines = {}, visible = opts.visible ~= false, alive = true,
         x = (opts.position and opts.position.X) or opts.x or 20,
-        y = (opts.position and opts.position.Y) or opts.y or 140, width = opts.width or opts.w }
+        y = (opts.position and opts.position.Y) or opts.y or 140, width = opts.width or opts.w,
+        statValueX = opts.statValueX }
     ProjectState.boxes[#ProjectState.boxes + 1] = box
     local api = { _box = box }
     function api:Text(value, color)
@@ -2189,6 +2197,130 @@ local function drawKeyMenu(click)
     return click
 end
 
+function ProjectState.drawFeatureSettings(click, held)
+    local popup = ProjectState.featureSettings
+    if not popup then return click end
+
+    local settings = popup.item and popup.item.settings
+    if not settings then
+        ProjectState.featureSettings = nil
+        return click
+    end
+
+    popup.anim = approach(popup.anim or 0, 1, 20)
+    local a = popup.anim
+    local options = settings.options or {}
+    local rowH = 42
+    local w = ProjectState.compactSkeet and 238 or 260
+    local expandedChoices = popup.openOption and (popup.openOption.choices or {}) or {}
+    local expandedH = popup.openOption and (#expandedChoices * 21 + 4) or 0
+    local h = 42 + #options * rowH + expandedH + 10
+    local vw, vh = viewportSize()
+    local x = clamp(popup.x, 8, max(8, vw - w - 8))
+    local y = clamp(popup.y, 8, max(8, vh - h - 8)) + (1 - a) * -6
+
+    rect(x, y, w, h, c3(15, 15, 16), 250, 0, 0.99 * a)
+    strokeRect(x, y, w, h, c3(61, 65, 76), 251, 0, a)
+    ProjectState.spectrumLine(x + 1, y + 1, w - 2, 252, a)
+    txt(settings.title or "Settings", x + 12, y + 14, WHITE, 13, FontSystem, 253, false, false, w - 48, AL.text * a)
+
+    local closeHov = over(x + w - 28, y + 8, 20, 20)
+    txtC("x", x + w - 18, y + 18, WHITE, 13, FontSystem, 253, (closeHov and AL.hover or AL.dim) * a)
+    if click and closeHov then
+        ProjectState.featureSettings = nil
+        return false
+    end
+
+    local optionOffset = 0
+    for index, option in ipairs(options) do
+        local oy = y + 36 + (index - 1) * rowH + optionOffset
+        local kind = option.type or "toggle"
+        txt(option.label or "Option", x + 12, oy + 5, WHITE, 12, FontSystem, 253, false, false, w - 24, AL.label * a)
+
+        if kind == "toggle" then
+            local bx, by, bs = x + w - 27, oy + 5, 11
+            local hov = over(bx - 4, by - 4, bs + 8, bs + 8)
+            rect(bx, by, bs, bs, option.value and ProjectState._accentMid or Theme.trackOff, 253, 0, a)
+            strokeRect(bx, by, bs, bs, option.value and lerpColor(ProjectState._accentMid, WHITE, 0.28) or Theme.border, 254, 0, a)
+            if option.value then
+                rect(bx + 3, by + 3, bs - 6, bs - 6, WHITE, 255, 0, 0.9 * a)
+            end
+            if click and hov then
+                option.value = not option.value
+                invoke(option.callback, option.value)
+                click = false
+            end
+        elseif kind == "slider" then
+            local minV = tonumber(option.min) or 0
+            local maxV = tonumber(option.max) or 100
+            local stepV = tonumber(option.step) or 1
+            local value = clamp(tonumber(option.value) or minV, minV, maxV)
+            local sx, sy, sw = x + 12, oy + 25, w - 24
+            local alpha = maxV == minV and 0 or (value - minV) / (maxV - minV)
+            rect(sx, sy, sw, 4, Theme.sliderTrack, 253, 0, a)
+            rect(sx, sy, sw * alpha, 4, ProjectState._accentMid, 254, 0, a)
+            local hov = over(sx, sy - 6, sw, 16)
+            if click and hov then popup.drag = option; click = false end
+            if held and popup.drag == option then
+                local raw = minV + clamp((ProjectState.mouseX - sx) / sw, 0, 1) * (maxV - minV)
+                local nextValue = clamp(floor((raw - minV) / stepV + 0.5) * stepV + minV, minV, maxV)
+                if nextValue ~= option.value then
+                    option.value = nextValue
+                    invoke(option.callback, nextValue)
+                end
+            end
+            local valueText = tostring(option.value) .. tostring(option.suffix or "")
+            txt(valueText, x + w - 84, oy + 5, WHITE, 12, FontMono, 254, false, false, 72, AL.text * a)
+        elseif kind == "dropdown" then
+            local fx, fy, fw, fh = x + 12, oy + 22, w - 24, 17
+            local fieldHov = over(fx, fy, fw, fh)
+            local isOpen = popup.openOption == option
+            rect(fx, fy, fw, fh, Theme.surface3, 253, 0, a)
+            strokeRect(fx, fy, fw, fh, isOpen and ProjectState._accentMid or Theme.border, 254, 0, (isOpen and 0.8 or 0.65) * a)
+            txt(tostring(option.value or "-"), fx + 7, textTop(fy, fh, 11), WHITE, 11, FontSystem, 255, false, false, fw - 28, AL.text * a)
+            lineD(fx + fw - 15, fy + 7, fx + fw - 11, fy + 11, WHITE, 255, 1, AL.dim * a)
+            lineD(fx + fw - 11, fy + 11, fx + fw - 7, fy + 7, WHITE, 255, 1, AL.dim * a)
+
+            if click and fieldHov then
+                popup.openOption = isOpen and nil or option
+                click = false
+            end
+
+            if isOpen then
+                local choices = option.choices or {}
+                local listY = fy + fh + 3
+                for choiceIndex, choice in ipairs(choices) do
+                    local cy = listY + (choiceIndex - 1) * 21
+                    local choiceHov = over(fx, cy, fw, 20)
+                    local selected = option.value == choice
+                    rect(fx, cy, fw, 20, selected and ProjectState._accentMid or Theme.surface2, 253, 0, (selected and 0.22 or (choiceHov and 0.9 or 0.78)) * a)
+                    strokeRect(fx, cy, fw, 20, selected and ProjectState._accentMid or Theme.border, 254, 0, (selected and 0.72 or 0.45) * a)
+                    txt(tostring(choice), fx + 7, textTop(cy, 20, 11), WHITE, 11, FontSystem, 255, false, false, fw - 14, (selected and AL.text or AL.label) * a)
+                    if click and choiceHov then
+                        option.value = choice
+                        popup.openOption = nil
+                        invoke(option.callback, choice)
+                        click = false
+                    end
+                end
+                optionOffset = optionOffset + #choices * 21 + 4
+            end
+        end
+    end
+
+    if not held then popup.drag = nil end
+    if Input.esc.click then
+        ProjectState.featureSettings = nil
+        Input.esc.click = false
+        return false
+    end
+    if click and not over(x - 4, y - 4, w + 8, h + 8) then
+        ProjectState.featureSettings = nil
+        return false
+    end
+    return click
+end
+
 local function drawHotkeyOverlay(click, held)
     if ProjectState.hotkeyEnabled == false then return click end
     if not ProjectState._winReady then return click end
@@ -2460,7 +2592,11 @@ local function drawBoxes(click, held)
                     local dotA = ready and (0.5 + 0.42 * sin((clock() or 0) * 5)) or (idle and 0.7 or 0.85)
                     circ(x + 16, ry + 7, 3, dotCol, 163, true, 1, 12, dotA)
                     txt(ln.label, x + 28, ry, WHITE, 12, FontSystem, 162, false, false, w - 110, AL.label)
-                    txt(ln.text, x + w - 12 - textWidth(ln.text, 12, FontMono), ry, ln.color or WHITE, 12, FontMono, 162, false, false, nil, ready and AL.text or AL.label)
+                    if box.statValueX then
+                        txt(ln.text, x + box.statValueX, ry, ln.color or WHITE, 12, FontMono, 162, false, false, w - box.statValueX - 12, ready and AL.text or AL.label)
+                    else
+                        txt(ln.text, x + w - 12 - textWidth(ln.text, 12, FontMono), ry, ln.color or WHITE, 12, FontMono, 162, false, false, nil, ready and AL.text or AL.label)
+                    end
                 elseif ln.kind == "bar" then
                     rect(x + 14, ry + 5, w - 28, 6, WHITE, 162, 3, AL.field)
                     if ln.pct > 0 then rect(x + 14, ry + 5, max(6, (w - 28) * ln.pct / 100), 6, Theme.accentA, 163, 3, 0.95) end
@@ -2670,7 +2806,7 @@ local function drawWidget(item, rowX, rowY, rowW, trans, click, rightClick, popu
 
         local rightX = rowX + rowW
         local checkLabelX = rowX
-        local onColor, onKey = false, false
+        local onColor, onKey, onSettings = false, false, false
 
         local onCol = item.risk and (Theme.unsafe or c3(255, 190, 70)) or ProjectState._accentMid
         local on = item.value and 1 or 0
@@ -2683,8 +2819,7 @@ local function drawWidget(item, rowX, rowY, rowW, trans, click, rightClick, popu
             rect(px, py, bs, bs, item.value and onCol or Theme.trackOff, 30, 0, trans)
             strokeRect(px, py, bs, bs, item.value and lerpColor(onCol, WHITE, 0.28) or Theme.border, 31, 0, trans)
             if item.value then
-                lineD(px + 2.5, py + 5.5, px + 4.5, py + 8, WHITE, 32, 1, 0.95 * trans)
-                lineD(px + 4.5, py + 8, px + 8.8, py + 2.5, WHITE, 32, 1, 0.95 * trans)
+                rect(px + 3, py + 3, bs - 6, bs - 6, WHITE, 32, 0, 0.9 * trans)
             elseif hovB then
                 rect(px + 2, py + 2, bs - 4, bs - 4, onCol, 32, 0, 0.22 * trans)
             end
@@ -2736,10 +2871,29 @@ local function drawWidget(item, rowX, rowY, rowW, trans, click, rightClick, popu
                 rightClick = false
             end
         end
+        if item.settings then
+            rightX = rightX - 18
+            local gearHov = interact and over(rightX, rowY + 3, 18, 18)
+            drawIcon("cog", rightX + 2, rowY + 5, 14, gearHov and ProjectState._accentMid or Theme.sub, 33, trans)
+            onSettings = gearHov
+            rightX = rightX - 6
+            if click and gearHov then
+                ProjectState.featureSettings = {
+                    item = item,
+                    x = ProjectState.mouseX + 10,
+                    y = ProjectState.mouseY - 16,
+                    anim = 0
+                }
+                ProjectState.dropdown = nil
+                ProjectState.colorpicker = nil
+                ProjectState.keyMenu = nil
+                click = false
+            end
+        end
         local checkH = ProjectState.skeetMode and 22 or 32
         txt(item.label, checkLabelX, textTop(rowY, checkH, 13), WHITE, 13, FontSystem, 31, false, false, rightX - checkLabelX - 4, AL.label * trans)
         if item.tooltip and interact and over(rowX, rowY, rowW, 32) then tooltipReq(item.tooltip, ProjectState.mouseX, ProjectState.mouseY) end
-        if click and interact and over(rowX, rowY, rowW, 32) and not onColor and not onKey then
+        if click and interact and over(rowX, rowY, rowW, 32) and not onColor and not onKey and not onSettings then
             setItemValue(item, not item.value, true); click = false
         end
 
@@ -3028,18 +3182,19 @@ local function sectionHeight(section)
     local hdr = secHeaderH(section)
     local full = hdr + 16 + 12
     local n = #section.items
-    for i, item in ipairs(section.items) do full = full + getItemHeight(item) + (i < n and (ProjectState.rowLines and 8 or 10) or 0) end
+    local gap = ProjectState.skeetMode and 5 or (ProjectState.rowLines and 8 or 10)
+    for i, item in ipairs(section.items) do full = full + getItemHeight(item) + (i < n and gap or 0) end
     return full + ((hdr + 6) - full) * section._cA
 end
 
 local function drawSections(tab, click, held, rightClick, px, contY, pw, contH)
-    local popupBlocking = ProjectState.dropdown ~= nil or ProjectState.colorpicker ~= nil or ProjectState.keyMenu ~= nil or ProjectState.dialog ~= nil
+    local popupBlocking = ProjectState.dropdown ~= nil or ProjectState.colorpicker ~= nil or ProjectState.featureSettings ~= nil or ProjectState.keyMenu ~= nil or ProjectState.dialog ~= nil
     local colW = floor((pw - 8) / 2)
     local scrollTarget = ProjectState._spotScrollTo; ProjectState._spotScrollTo = nil
 
     local leftEnd, rightEnd = 0, 0
     for _, s in ipairs(tab.sections) do
-        s._h = ProjectState.skeetMode and contH or sectionHeight(s)
+        s._h = ProjectState.skeetMode and not ProjectState.compactSkeet and contH or sectionHeight(s)
         if s.side == "Full" then
             local top = max(leftEnd, rightEnd)
             leftEnd = top + s._h + 8; rightEnd = leftEnd
@@ -3049,7 +3204,7 @@ local function drawSections(tab, click, held, rightClick, px, contY, pw, contH)
             leftEnd = leftEnd + s._h + 8
         end
     end
-    local contentH = ProjectState.skeetMode and contH or max(leftEnd, rightEnd)
+    local contentH = ProjectState.skeetMode and not ProjectState.compactSkeet and contH or max(leftEnd, rightEnd)
     tab.maxScroll = max(0, contentH - contH)
 
     if ProjectState.mouseScroll ~= 0 and not popupBlocking and over(ProjectState.x, ProjectState.y, ProjectState.w, ProjectState.h) then
@@ -3242,6 +3397,7 @@ end
 
 function ProjectState.drawSkeetWindow(click, held, rightClick)
     local v = ProjectState.drawVisible
+    local compact = ProjectState.compactSkeet
 
     if held and ProjectState.drag then
         ProjectState.x = ProjectState.mouseX - ProjectState.drag.ox
@@ -3250,8 +3406,8 @@ function ProjectState.drawSkeetWindow(click, held, rightClick)
     end
     if held and ProjectState.resizeEdge then
         local rs = ProjectState.resizeStart
-        ProjectState.wTarget = max(660, rs.w + (ProjectState.mouseX - rs.mx))
-        ProjectState.hTarget = max(545, rs.h + (ProjectState.mouseY - rs.my))
+        ProjectState.wTarget = max(compact and 500 or 660, rs.w + (ProjectState.mouseX - rs.mx))
+        ProjectState.hTarget = max(compact and 350 or 545, rs.h + (ProjectState.mouseY - rs.my))
     end
 
     ProjectState.wTarget = ProjectState.wTarget or ProjectState.w
@@ -3260,8 +3416,8 @@ function ProjectState.drawSkeetWindow(click, held, rightClick)
     ProjectState.h = approach(ProjectState.h, ProjectState.hTarget, 16)
 
     local x, y, w, h = ProjectState.x, ProjectState.y + (1 - v) * 8, ProjectState.w, ProjectState.h
-    local railW, inset = 92, 6
-    local noPopup = not ProjectState.dropdown and not ProjectState.colorpicker and not ProjectState.keyMenu and not ProjectState.spotlightOpen
+    local railW, inset = compact and 68 or 92, 6
+    local noPopup = not ProjectState.dropdown and not ProjectState.colorpicker and not ProjectState.featureSettings and not ProjectState.keyMenu and not ProjectState.spotlightOpen
 
     rect(x, y, w, h, c3(17, 17, 17), 9, 0, v)
     strokeRect(x, y, w, h, c3(0, 0, 0), 10, 0, v)
@@ -3275,7 +3431,7 @@ function ProjectState.drawSkeetWindow(click, held, rightClick)
     rect(railX, railY, railW, railH, c3(12, 12, 12), 14, 0, v)
     lineD(railX + railW, railY, railX + railW, railY + railH, c3(50, 48, 52), 15, 1, v)
 
-    local cellH = 92
+    local cellH = compact and 64 or 92
     for i, tab in ipairs(ProjectState.tabs) do
         if not tab.hidden then
             local cy = railY + (i - 1) * cellH
@@ -3289,7 +3445,8 @@ function ProjectState.drawSkeetWindow(click, held, rightClick)
                 lineD(railX + railW, cy, railX + railW, cy + cellH, c3(50, 48, 52), 17, 1, v)
             end
             local iconColor = active and c3(236, 236, 236) or (hov and c3(196, 196, 196) or c3(92, 92, 92))
-            drawIcon(tab.icon or "target", railX + 23, cy + 23, 46, iconColor, 18, v)
+            local iconSize = compact and 30 or 46
+            drawIcon(tab.icon or "target", railX + (railW - iconSize) / 2, cy + (cellH - iconSize) / 2, iconSize, iconColor, 18, v)
             if hov then tooltipReq(tab.name, ProjectState.mouseX, ProjectState.mouseY) end
             if click and hov then
                 if not active then
@@ -3303,10 +3460,10 @@ function ProjectState.drawSkeetWindow(click, held, rightClick)
         end
     end
 
-    local contentX = railX + railW + 30
-    local contentY = railY + 22
-    local contentW = w - (contentX - x) - 28
-    local contentH = h - (contentY - y) - 30
+    local contentX = railX + railW + (compact and 18 or 30)
+    local contentY = railY + (compact and 16 or 22)
+    local contentW = w - (contentX - x) - (compact and 20 or 28)
+    local contentH = h - (contentY - y) - (compact and 20 or 30)
     ProjectState.contentFade = approach(ProjectState.contentFade, 1, 16)
     if ProjectState.contentFade > 0.997 then ProjectState.contentFade = 1 end
     if ProjectState.activeTab then
@@ -3387,7 +3544,7 @@ local function drawWindow(click, held, rightClick)
     local swC, swE = 48, max(126, floor(w * 0.23))
     if ProjectState.railOnly then swE = swC end
     local swPrev = swC + (swE - swC) * (ProjectState._sbX or 0)
-    local noPopup = not ProjectState.dropdown and not ProjectState.colorpicker and not ProjectState.keyMenu and not ProjectState.spotlightOpen
+    local noPopup = not ProjectState.dropdown and not ProjectState.colorpicker and not ProjectState.featureSettings and not ProjectState.keyMenu and not ProjectState.spotlightOpen
     local sidebarHov = sideMode and noPopup and over(x, y, swPrev, h)
     ProjectState._sbX = approach(ProjectState._sbX or 0, sidebarHov and 1 or 0, 10)
     if abs(ProjectState._sbX - (sidebarHov and 1 or 0)) < 0.003 then ProjectState._sbX = sidebarHov and 1 or 0 end
@@ -3986,10 +4143,18 @@ end
 local function cfgDir() return ProjectState.cfgFolder or CFG_LEGACY end
 local function ensureFolder() pcall(function() local d = cfgDir(); if not isfolder(d) then makefolder(d) end end) end
 local function serializeConfig()
-    local data = { flags = {}, keybinds = {}, colors = {}, uiFont = ProjectState.uiFontName, layout = ProjectState.tabLayout, search = ProjectState.searchStyle }
+    local data = { flags = {}, keybinds = {}, colors = {}, options = {}, uiFont = ProjectState.uiFontName, layout = ProjectState.tabLayout, search = ProjectState.searchStyle }
     for _, tab in ipairs(ProjectState.tabs) do
         for _, sec in ipairs(tab.sections) do
             for _, item in ipairs(sec.items) do
+                if item.settings and not item.noSave then
+                    local baseKey = tab.name .. "." .. sec.name .. "." .. item.label .. ".settings."
+                    for _, option in ipairs(item.settings.options or {}) do
+                        if option.value ~= nil and not option.noSave then
+                            data.options[baseKey .. tostring(option.key or option.label)] = option.value
+                        end
+                    end
+                end
                 if item.type == "rangeslider" and not item.noSave then
                     local key = tab.name .. "." .. sec.name .. "." .. item.label
                     data.flags[key] = { item.valueLo, item.valueHi }
@@ -4046,6 +4211,46 @@ local function applyConfigData(data)
     for _, tab in ipairs(ProjectState.tabs) do
         for _, sec in ipairs(tab.sections) do
             for _, item in ipairs(sec.items) do
+                if item.settings and not item.noSave then
+                    local baseKey = tab.name .. "." .. sec.name .. "." .. item.label .. ".settings."
+                    for _, option in ipairs(item.settings.options or {}) do
+                        local saved = data.options and data.options[baseKey .. tostring(option.key or option.label)]
+                        if saved == nil and option.legacyOptionKeys and data.options then
+                            for _, legacyKey in ipairs(option.legacyOptionKeys) do
+                                saved = data.options[legacyKey]
+                                if saved ~= nil then break end
+                            end
+                        end
+                        if saved == nil and option.legacyOptionKey and data.options then
+                            saved = data.options[option.legacyOptionKey]
+                        end
+                        if saved == nil and option.legacyKey and data.flags then
+                            saved = data.flags[option.legacyKey]
+                        end
+                        if saved ~= nil and option.deserialize then
+                            local ok, converted = pcall(option.deserialize, saved)
+                            saved = ok and converted or nil
+                        end
+                        if saved ~= nil and not option.noSave then
+                            if option.type == "slider" then
+                                local minV = tonumber(option.min) or 0
+                                local maxV = tonumber(option.max) or 100
+                                local stepV = tonumber(option.step) or 1
+                                local numeric = tonumber(saved)
+                                if numeric then option.value = clamp(floor((numeric - minV) / stepV + 0.5) * stepV + minV, minV, maxV) end
+                            elseif option.type == "dropdown" then
+                                local valid
+                                for _, choice in ipairs(option.choices or {}) do
+                                    if choice == saved then valid = true; break end
+                                end
+                                if valid then option.value = saved end
+                            else
+                                option.value = saved == true
+                            end
+                            invoke(option.callback, option.value)
+                        end
+                    end
+                end
                 if item.type == "rangeslider" and item.label and not item.noSave then
                     local key = tab.name .. "." .. sec.name .. "." .. item.label
                     local fv = data.flags and data.flags[key]
@@ -4132,6 +4337,7 @@ local function applyConfigData(data)
         ProjectState.checkboxStyle = lock.checkboxStyle
         ProjectState.railOnly = lock.railOnly
         ProjectState.skeetMode = lock.skeetMode
+        ProjectState.compactSkeet = lock.compactSkeet == true
         ProjectState.searchStyle = lock.searchStyle
         ProjectState.tabLayout = lock.layout
         ui:SetMenuKey(lock.menuKey)
@@ -4565,6 +4771,7 @@ local function step()
         click, held, rightClick = drawWindow(click, held, rightClick)
         click, rightClick = drawDropdown(click, rightClick)
         click = drawColorpicker(click, held)
+        click = ProjectState.drawFeatureSettings(click, held)
         click = drawKeyMenu(click)
         drawTooltip()
         ProjectState.lastTooltipText = ProjectState.tooltipText
@@ -4613,7 +4820,7 @@ local function frameDelay()
     if moved
         or (Input.m1 and Input.m1.held) or (Input.m2 and Input.m2.held)
         or ProjectState.drag or ProjectState.resizeEdge or ProjectState.scrollDrag
-        or ProjectState.dropdown or ProjectState.colorpicker or ProjectState.focus
+        or ProjectState.dropdown or ProjectState.colorpicker or ProjectState.featureSettings or ProjectState.focus
         or ProjectState.kbCapture or ProjectState.spotlightOpen then
         ProjectState._lastAct = clock() or 0
     end
@@ -4855,6 +5062,7 @@ function ui:CreateWindow(config)
     if config.checkboxStyle ~= nil then ui:SetCheckboxStyle(config.checkboxStyle) end
     if config.railOnly ~= nil then ProjectState.railOnly = config.railOnly == true end
     if config.skeetMode ~= nil then ProjectState.skeetMode = config.skeetMode == true end
+    if config.compactSkeet ~= nil then ProjectState.compactSkeet = config.compactSkeet == true end
     if config.searchStyle == "icon" or config.searchStyle == "bar" or config.searchStyle == "off" then ProjectState.searchStyle = config.searchStyle end
     if config.smartFps ~= nil then ProjectState.smartFps = config.smartFps == true end
     if config.keybindOverlay ~= nil then ProjectState.hotkeyEnabled = config.keybindOverlay ~= false end
@@ -4874,7 +5082,7 @@ function ui:CreateWindow(config)
             accentA = Theme.accentA, accentB = Theme.accentB,
             opacity = ProjectState.menuOpacity, rounding = ProjectState.roundScale,
             checkboxStyle = ProjectState.checkboxStyle, railOnly = ProjectState.railOnly,
-            skeetMode = ProjectState.skeetMode,
+            skeetMode = ProjectState.skeetMode, compactSkeet = ProjectState.compactSkeet,
             searchStyle = ProjectState.searchStyle, layout = "side",
             menuKey = menuKey,
             fontName = ProjectState.uiFontName, font = ProjectState.uiFont,
