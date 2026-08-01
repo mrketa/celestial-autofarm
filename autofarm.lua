@@ -169,6 +169,7 @@ local world3 = {
 }
 
 local collectWorld3SummerCoins
+local returnToWorld3Spawn
 
 local summerCoins = {
     auto = false,
@@ -492,7 +493,7 @@ local function getWorld3Stage1WinBlock()
     return nil
 end
 
-local function runWorld3Stage1Cycle(forceRun, token)
+local function runWorld3Stage1Attempt(forceRun, token)
     if not waitForWorld3Spawn(forceRun, token) then
         assert(world3MayContinue(forceRun, token), "Gestoppt")
         error("Kein stabiler Spawn gefunden")
@@ -554,7 +555,19 @@ local function runWorld3Stage1Cycle(forceRun, token)
         end
     end
 
-    assert(reachedStage1, "Stage-1-Teleport wurde korrigiert")
+    if not reachedStage1 then
+        stopRoot()
+        world3.status = "Stage 1 TP korrigiert"
+        world3.point = "Recovery"
+
+        repeat
+            assert(world3MayContinue(forceRun, token), "Gestoppt")
+            world3.status = "Kehrt zum Spawn zurück"
+            task.wait(0.5)
+        until returnToWorld3Spawn()
+
+        return false
+    end
 
     local walkTarget = winBlock.Position
     local walkSpeed = 60
@@ -619,7 +632,7 @@ local function runWorld3Stage1Cycle(forceRun, token)
                 collectWorld3SummerCoins(forceRun, token)
             end
 
-            return
+            return true
         end
 
         root = getRoot()
@@ -661,6 +674,26 @@ local function runWorld3Stage1Cycle(forceRun, token)
     stopRoot()
 
     error("WinBlock32-Reward wurde nicht erkannt")
+end
+
+local function runWorld3Stage1Cycle(forceRun, token)
+    local recoveries = 0
+
+    while world3MayContinue(forceRun, token) do
+        if runWorld3Stage1Attempt(forceRun, token) then
+            return
+        end
+
+        recoveries = recoveries + 1
+        world3.status = string.format(
+            "Stage 1 Recovery %d",
+            recoveries
+        )
+        world3.point = "Spawn"
+        task.wait(math.min(0.5 + recoveries * 0.15, 2))
+    end
+
+    error("Gestoppt")
 end
 
 local function runWorld3WinBlock35Cycle(forceRun, token)
@@ -1530,7 +1563,7 @@ local function collectNearestSummerCoin()
     return true
 end
 
-local function returnToWorld3Spawn()
+returnToWorld3Spawn = function()
     if game.PlaceId ~= WORLD3_PLACE_ID then
         return false
     end
