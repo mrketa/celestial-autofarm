@@ -161,6 +161,14 @@ local world3 = {
     runToken = 0
 }
 
+local summerCoins = {
+    auto = false,
+    running = false,
+    status = "Wartet auf Coins",
+    collected = 0,
+    visited = {}
+}
+
 local WORLD3_MINIMUM_TIME = 12.5
 local WORLD3_WIN_PLATE = Vector3.new(
     -1431.3326,
@@ -1413,6 +1421,110 @@ local function stopBbno()
     stopRoot()
 end
 
+local function findNearestSummerCoin()
+    local folder = workspace:FindFirstChild("SummerCoinsLocal")
+    local root = getRoot()
+
+    if not folder or not root then
+        return nil, nil
+    end
+
+    local nearestModel
+    local nearestPart
+    local nearestDistance = math.huge
+
+    for _, model in ipairs(folder:GetChildren()) do
+        if model:IsA("Model")
+            and model.Name == "SummerCoin"
+            and not summerCoins.visited[model]
+        then
+            local coin = model:FindFirstChild("Coin", true)
+
+            if coin and coin:IsA("BasePart") then
+                local distance = (coin.Position - root.Position).Magnitude
+
+                if distance < nearestDistance then
+                    nearestModel = model
+                    nearestPart = coin
+                    nearestDistance = distance
+                end
+            end
+        end
+    end
+
+    return nearestModel, nearestPart
+end
+
+local function collectNearestSummerCoin()
+    local model, coin = findNearestSummerCoin()
+
+    if not model or not coin then
+        return false
+    end
+
+    local root = getRoot()
+
+    if not root then
+        summerCoins.status = "Charakter nicht verfügbar"
+        return false
+    end
+
+    summerCoins.visited[model] = true
+    summerCoins.status = "Sammelt Summer Coin"
+    stopPart(root)
+    root.Position = coin.Position + Vector3.new(0, 3, 0)
+
+    task.spawn(function()
+        local deadline = tick() + 4
+
+        while model.Parent and tick() < deadline do
+            task.wait(0.1)
+        end
+
+        if not model.Parent then
+            summerCoins.collected = summerCoins.collected + 1
+            summerCoins.status = "Coin eingesammelt"
+        else
+            summerCoins.visited[model] = nil
+            summerCoins.status = "Coin nicht bestätigt"
+        end
+    end)
+
+    return true
+end
+
+local function startSummerCoins()
+    if summerCoins.running then
+        return
+    end
+
+    stopWorld3()
+    stopBbno()
+    summerCoins.auto = true
+    summerCoins.running = true
+
+    task.spawn(function()
+        while generation == _G.CelestialFarmGeneration
+            and summerCoins.auto
+        do
+            if collectNearestSummerCoin() then
+                task.wait(0.14)
+            else
+                summerCoins.status = "Wartet auf Coins"
+                task.wait(0.1)
+            end
+        end
+
+        summerCoins.running = false
+    end)
+end
+
+local function stopSummerCoins()
+    summerCoins.auto = false
+    summerCoins.status = "Gestoppt"
+    stopRoot()
+end
+
 local window = Lib:CreateWindow({
     title = "CELESTIAL",
     subtitle = "ORBIT FARM  /  1.0",
@@ -1624,6 +1736,75 @@ bbnoLive:Label(function()
     return "Verdient: " .. formatNumber(bbno.earned)
 end)
 
+local summerTab = window:Tab("Summer Coins", "sun")
+local summerControl = summerTab:Section(
+    "Summer Coin Collector",
+    "Left",
+    "Sammelt aktive Event-Coins"
+)
+local summerLive = summerTab:Section(
+    "Live",
+    "Right",
+    "Aktueller Collector-Status"
+)
+
+local summerAutoHandle
+
+summerAutoHandle = summerControl:Toggle(
+    "Auto Collect",
+    false,
+    function(enabled)
+        if enabled then
+            startSummerCoins()
+        else
+            stopSummerCoins()
+        end
+    end
+)
+
+summerControl:Button("Collect Once", function()
+    if not collectNearestSummerCoin() then
+        Lib:Notify(
+            "Summer Coins",
+            "Keine aktive Coin gefunden.",
+            3,
+            "info"
+        )
+    end
+end):AddButton("Stop", function()
+    stopSummerCoins()
+
+    if summerAutoHandle:Get() then
+        summerAutoHandle:Set(false)
+    end
+end)
+
+summerControl:Info(
+    "Auto Collect stoppt laufende Farmen und teleportiert im serverseitigen 0,12-Sekunden-Sammelfenster zur nächsten Coin."
+)
+
+summerLive:Label(function()
+    return "Status: " .. summerCoins.status
+end)
+summerLive:Label(function()
+    local folder = workspace:FindFirstChild("SummerCoinsLocal")
+    local count = 0
+
+    if folder then
+        for _, model in ipairs(folder:GetChildren()) do
+            if model:IsA("Model") and model.Name == "SummerCoin" then
+                count = count + 1
+            end
+        end
+    end
+
+    return "Aktive Coins: " .. tostring(count)
+end)
+summerLive:Divider("Session")
+summerLive:Label(function()
+    return "Eingesammelt: " .. tostring(summerCoins.collected)
+end)
+
 task.spawn(function()
     while generation == _G.CelestialFarmGeneration do
         if world3AutoHandle:Get() ~= world3.auto then
@@ -1632,6 +1813,10 @@ task.spawn(function()
 
         if bbnoAutoHandle:Get() ~= bbno.auto then
             bbnoAutoHandle:Set(bbno.auto)
+        end
+
+        if summerAutoHandle:Get() ~= summerCoins.auto then
+            summerAutoHandle:Set(summerCoins.auto)
         end
 
         if world3.auto and not world3.running then
