@@ -1,8 +1,17 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 local WORLD3_PLACE_ID = 93411036959889
 local UINT32_RANGE = 4294967296
 local MOTION_TICK = 1 / 30
+local STAGE7_HAZARD = {
+    bossSpeed = 400,
+    tsunamiSpeed = 300,
+    tsunamiMinRemaining = 0.35,
+    tsunamiMaxRemaining = 0.60,
+    fallbackMinX = -1925,
+    fallbackMaxX = -1875
+}
 local POLL_TICK = 0.05
 local player = Players.LocalPlayer
 
@@ -69,6 +78,7 @@ local function stopRoot()
     stopPart(getRoot())
 end
 
+
 local function formatNumber(value)
     local formatted = tostring(math.floor(value or 0))
 
@@ -111,11 +121,112 @@ local world3 = {
     lastRewardAt = nil,
     runToken = 0,
     spawnPosition = nil,
-    eventsActive = false,
-    autoVoidRecovery = true,
-    voidRecoveryPending = false,
-    voidRecoveries = 0
+    eventsActive = false
 }
+
+local TP_DIAGNOSTIC_PATH = "celestial_tp_flags.txt"
+local lastTpCommand
+
+local function vectorRecord(value)
+    if typeof(value) ~= "Vector3" then
+        return nil
+    end
+    return { x = value.X, y = value.Y, z = value.Z }
+end
+
+local function writeTpDiagnostic(kind, data)
+    local record = {
+        type = kind,
+        timestamp = os.time(),
+        clock = tick(),
+        status = world3.status,
+        point = world3.point,
+        data = data or {}
+    }
+    local encoded
+    pcall(function()
+        encoded = HttpService:JSONEncode(record)
+    end)
+    if type(encoded) ~= "string" then
+        return
+    end
+    if type(appendfile) == "function" then
+        pcall(appendfile, TP_DIAGNOSTIC_PATH, encoded .. "\n")
+    end
+end
+
+local function rememberTpCommand(target, commanded, speed)
+    if not lastTpCommand then
+        lastTpCommand = {}
+    end
+
+    lastTpCommand.at = tick()
+    lastTpCommand.point = world3.point
+    lastTpCommand.status = world3.status
+    lastTpCommand.target = target
+    lastTpCommand.commanded = commanded
+    lastTpCommand.speed = speed
+end
+
+local function reportTpCorrection(phase, actual, expected, target, speed)
+    local deviation = typeof(actual) == "Vector3"
+        and typeof(expected) == "Vector3"
+        and (actual - expected).Magnitude
+        or -1
+    writeTpDiagnostic("position_correction", {
+        phase = phase,
+        actual = vectorRecord(actual),
+        expected = vectorRecord(expected),
+        target = vectorRecord(target),
+        deviation = deviation,
+        speed = speed
+    })
+    warn(string.format(
+        "[Celestial TP] correction at %s (%s), deviation %.2f",
+        tostring(world3.point),
+        tostring(phase),
+        deviation
+    ))
+end
+
+pcall(function()
+    if type(writefile) == "function" then
+        writefile(TP_DIAGNOSTIC_PATH, "")
+    end
+end)
+
+local function watchCharacterDeath(character)
+    local humanoid = character
+        and character:FindFirstChildOfClass("Humanoid")
+    local died = humanoid and humanoid.Died
+    local connect = died and died.Connect
+
+    if type(connect) ~= "function" then
+        return
+    end
+
+    pcall(connect, died, function()
+        if lastTpCommand and tick() - lastTpCommand.at <= 3 then
+            writeTpDiagnostic("death_after_tp", {
+                age = tick() - lastTpCommand.at,
+                commandPoint = lastTpCommand.point,
+                commandStatus = lastTpCommand.status,
+                target = vectorRecord(lastTpCommand.target),
+                commanded = vectorRecord(lastTpCommand.commanded),
+                speed = lastTpCommand.speed
+            })
+            warn(
+                "[Celestial TP] death after movement at "
+                    .. tostring(lastTpCommand.point)
+            )
+        end
+    end)
+end
+
+watchCharacterDeath(player.Character)
+pcall(function()
+    player.CharacterAdded:Connect(watchCharacterDeath)
+end)
 
 local returnToWorld3Spawn
 
@@ -137,8 +248,146 @@ local WORLD3_STAGE7_WIN_PLATE = Vector3.new(
     443.6126,
     1459.3718
 )
-local WORLD3_STAGE1_REWARD_INTERVAL = 3
 local WORLD3_ROUTE = {
+    {
+        name = "Safe Start",
+        position = Vector3.new(
+            -1473.716797,
+            -158.274429,
+            -956.626160
+        ),
+        physics = true,
+        dwell = 0.15
+    },
+    {
+        name = "Rolling Candy Bypass Start",
+        position = Vector3.new(
+            -1510,
+            -158.274429,
+            -956.626160
+        )
+    },
+    {
+        name = "Rolling Candy Bypass End",
+        position = Vector3.new(
+            -1510,
+            -68.3874282836914,
+            -533.1188354492188
+        )
+    },
+    {
+        name = "Stage 1",
+        position = Vector3.new(
+            -1490.1263427734375,
+            -68.3874282836914,
+            -533.1188354492188
+        )
+    },
+    {
+        name = "Stage 2",
+        position = Vector3.new(
+            -1476.367431640625,
+            -56.145263671875,
+            -36.770565032958984
+        )
+    },
+    {
+        name = "Stage 3 Rise",
+        position = Vector3.new(
+            -1453.0216064453125,
+            280,
+            12.547174453735352
+        )
+    },
+    {
+        name = "Stage 3 Gate",
+        position = Vector3.new(
+            -1454.333984375,
+            215.8647003173828,
+            328.38763427734375
+        )
+    },
+    {
+        name = "Stage 4 Ladder",
+        position = Vector3.new(
+            -1453.474365234375,
+            215.8647003173828,
+            623.4430541992188
+        )
+    },
+    {
+        name = "Stage 4 Top",
+        position = Vector3.new(
+            -1403.07275390625,
+            589.49755859375,
+            723.4365234375
+        )
+    },
+    {
+        name = "Win staging",
+        position = Vector3.new(
+            -1403.2591552734375,
+            533.8761596679688,
+            768.9608764648438
+        )
+    }
+}
+local WORLD3_STAGE6_ROUTE = {}
+
+for index = 1, #WORLD3_ROUTE - 1 do
+    table.insert(WORLD3_STAGE6_ROUTE, WORLD3_ROUTE[index])
+end
+
+for _, point in ipairs({
+    {
+        name = "Stage 5 Lower",
+        position = Vector3.new(-1404.4468, 390.5382, 724.7380)
+    },
+    {
+        name = "Stage 5 Rise",
+        position = Vector3.new(-1404.4468, 533.8660, 724.7380)
+    },
+    {
+        name = "Stage 5 Curve 1",
+        position = Vector3.new(-1400.3630, 620, 772.5512)
+    },
+    {
+        name = "Stage 5 Curve 2",
+        position = Vector3.new(-1362.1042, 620, 840.0916)
+    },
+    {
+        name = "Stage 5 Curve 3",
+        position = Vector3.new(-1303.8162, 620, 915.6722)
+    },
+    {
+        name = "Stage 5 Curve 4",
+        position = Vector3.new(-1260.5690, 620, 1030.5386)
+    },
+    {
+        name = "Stage 5 Curve 5",
+        position = Vector3.new(-1280.7828, 620, 1100.2794)
+    },
+    {
+        name = "Stage 5 Curve 6",
+        position = Vector3.new(-1337.5544, 620, 1205.0078)
+    },
+    {
+        name = "Stage 5 Curve 7",
+        position = Vector3.new(-1397.1460, 620, 1344.5568)
+    },
+    {
+        name = "Stage 5 Boss Bypass Drop",
+        position = Vector3.new(-1397.1460, 533.8660, 1344.5568)
+    },
+    {
+        name = "WinBlock36 staging",
+        position = Vector3.new(-1422.8318, 533.8660, 1335.9071)
+    }
+}) do
+    table.insert(WORLD3_STAGE6_ROUTE, point)
+end
+
+local WORLD3_STAGE7_ROUTE = {
     {
         name = "Safe Start",
         position = Vector3.new(
@@ -198,22 +447,6 @@ local WORLD3_ROUTE = {
         )
     },
     {
-        name = "Win staging",
-        position = Vector3.new(
-            -1403.2591552734375,
-            533.8761596679688,
-            768.9608764648438
-        )
-    }
-}
-local WORLD3_STAGE6_ROUTE = {}
-
-for index = 1, #WORLD3_ROUTE - 1 do
-    table.insert(WORLD3_STAGE6_ROUTE, WORLD3_ROUTE[index])
-end
-
-for _, point in ipairs({
-    {
         name = "Stage 5 Lower",
         position = Vector3.new(-1404.4468, 390.5382, 724.7380)
     },
@@ -223,45 +456,40 @@ for _, point in ipairs({
     },
     {
         name = "Stage 5 Curve 1",
-        position = Vector3.new(-1400.3630, 533.8660, 772.5512)
+        position = Vector3.new(-1400.3630, 533.8660, 772.5512),
+        hazardSpeed = STAGE7_HAZARD.bossSpeed
     },
     {
         name = "Stage 5 Curve 2",
-        position = Vector3.new(-1362.1042, 533.8660, 840.0916)
+        position = Vector3.new(-1362.1042, 533.8660, 840.0916),
+        hazardSpeed = STAGE7_HAZARD.bossSpeed
     },
     {
         name = "Stage 5 Curve 3",
-        position = Vector3.new(-1303.8162, 533.8660, 915.6722)
+        position = Vector3.new(-1303.8162, 533.8660, 915.6722),
+        hazardSpeed = STAGE7_HAZARD.bossSpeed
     },
     {
         name = "Stage 5 Curve 4",
-        position = Vector3.new(-1260.5690, 533.8660, 1030.5386)
+        position = Vector3.new(-1260.5690, 533.8660, 1030.5386),
+        hazardSpeed = STAGE7_HAZARD.bossSpeed
     },
     {
         name = "Stage 5 Curve 5",
-        position = Vector3.new(-1280.7828, 533.8660, 1100.2794)
+        position = Vector3.new(-1280.7828, 533.8660, 1100.2794),
+        hazardSpeed = STAGE7_HAZARD.bossSpeed
     },
     {
         name = "Stage 5 Curve 6",
-        position = Vector3.new(-1337.5544, 533.8660, 1205.0078)
+        position = Vector3.new(-1337.5544, 533.8660, 1205.0078),
+        hazardSpeed = STAGE7_HAZARD.bossSpeed
     },
     {
         name = "Stage 5 Curve 7",
-        position = Vector3.new(-1397.1460, 533.8660, 1344.5568)
-    },
-    {
-        name = "WinBlock36 staging",
-        position = Vector3.new(-1422.8318, 533.8660, 1335.9071)
+        position = Vector3.new(-1397.1460, 533.8660, 1344.5568),
+        hazardSpeed = STAGE7_HAZARD.bossSpeed
     }
-}) do
-    table.insert(WORLD3_STAGE6_ROUTE, point)
-end
-
-local WORLD3_STAGE7_ROUTE = {}
-
-for index = 1, #WORLD3_STAGE6_ROUTE - 1 do
-    table.insert(WORLD3_STAGE7_ROUTE, WORLD3_STAGE6_ROUTE[index])
-end
+}
 
 for _, point in ipairs({
     {
@@ -280,43 +508,54 @@ for _, point in ipairs({
         name = "Stage 6 Drop 1",
         position = Vector3.new(-1397.9819, 541.0258, 1448.9692),
         tsunamiWindow = true,
-        minimumSpeed = 300
+        dwell = 0.02,
+        hazardSpeed = STAGE7_HAZARD.tsunamiSpeed
     },
     {
         name = "Stage 6 Drop 2",
         position = Vector3.new(-1433.3904, 502.0983, 1465.3796),
-        minimumSpeed = 300
+        dwell = 0.02,
+        hazardSpeed = STAGE7_HAZARD.tsunamiSpeed
     },
     {
         name = "Stage 6 Floor",
         position = Vector3.new(-1475.4453, 443.2820, 1472.2993),
-        minimumSpeed = 300
+        dwell = 0.02,
+        hazardSpeed = STAGE7_HAZARD.tsunamiSpeed
     },
     {
         name = "Stage 6 Run 1",
         position = Vector3.new(-1582.7493, 443.8641, 1475.2930),
-        minimumSpeed = 300
+        hazardPosition = Vector3.new(-1582.7493, 520, 1475.2930),
+        dwell = 0.02,
+        hazardSpeed = STAGE7_HAZARD.tsunamiSpeed
     },
     {
         name = "Stage 6 Run 2",
         position = Vector3.new(-1708.5725, 443.8643, 1477.6670),
-        minimumSpeed = 300
+        hazardPosition = Vector3.new(-1708.5725, 520, 1477.6670),
+        dwell = 0.02,
+        hazardSpeed = STAGE7_HAZARD.tsunamiSpeed
     },
     {
         name = "Stage 6 Run 3",
         position = Vector3.new(-1834.3958, 443.8653, 1478.9807),
-        minimumSpeed = 300
+        hazardPosition = Vector3.new(-1834.3958, 520, 1478.9807),
+        dwell = 0.02,
+        hazardSpeed = STAGE7_HAZARD.tsunamiSpeed
     },
     {
         name = "Stage 6 Run 4",
         position = Vector3.new(-1951.4202, 446.4776, 1479.5720),
-        minimumSpeed = 300
+        hazardPosition = Vector3.new(-1951.4202, 520, 1479.5720),
+        dwell = 0.02,
+        hazardSpeed = STAGE7_HAZARD.tsunamiSpeed
     },
     {
         name = "WinBlock37 safezone",
         position = Vector3.new(-2058.228516, 443.873718, 1484.287231),
         dwell = 0.25,
-        minimumSpeed = 300
+        hazardSpeed = STAGE7_HAZARD.tsunamiSpeed
     }
 }) do
     table.insert(WORLD3_STAGE7_ROUTE, point)
@@ -385,27 +624,112 @@ local function tweenWorld3(target, forceRun, token, dwell, speed)
 
     local startPosition = root.Position
     local distance = (target - startPosition).Magnitude
-    local duration = distance / math.max(speed or world3.speed, 1)
+    local movementSpeed = speed or world3.speed
+    local duration = distance / math.max(movementSpeed, 1)
     local startedAt = tick()
+    local lastCommanded = startPosition
+    if world3.route == "Stage 7" and duration > 0 then
+        local movementDone = false
+        local movementError = nil
+        local runService = game:GetService("RunService")
+        local connection
+        local lastHeartbeatAt = tick()
 
-    while tick() - startedAt < duration do
-        if not world3MayContinue(forceRun, token) then
+        local function advanceMovement()
+            if movementDone or movementError then
+                return
+            end
+
+            if not world3MayContinue(forceRun, token) then
+                stopPart(root)
+                movementError = "Stopped"
+                return
+            end
+
+            root = getRoot()
+
+            if not root then
+                movementError = "Character was replaced"
+                return
+            end
+
+            local actual = root.Position
+            if (actual - lastCommanded).Magnitude > 12 then
+                reportTpCorrection(
+                    "during_tween",
+                    actual,
+                    lastCommanded,
+                    target,
+                    movementSpeed
+                )
+                stopPart(root)
+                movementError = "Movement was corrected"
+                return
+            end
+
+            local alpha = math.min((tick() - startedAt) / duration, 1)
+            local position = startPosition:Lerp(target, alpha)
+
             stopPart(root)
-            return false, "Stopped"
+            root.CFrame = CFrame.new(position.X, position.Y, position.Z)
+            rememberTpCommand(target, position, movementSpeed)
+            lastCommanded = position
+            movementDone = alpha >= 1
         end
 
-        root = getRoot()
+        connection = runService.Heartbeat:Connect(function()
+            lastHeartbeatAt = tick()
+            advanceMovement()
+        end)
 
-        if not root then
-            return false, "Character was replaced"
+        while not movementDone and not movementError do
+            task.wait(POLL_TICK)
+
+            if tick() - lastHeartbeatAt > 0.1 then
+                advanceMovement()
+            end
         end
 
-        local alpha = math.min((tick() - startedAt) / duration, 1)
-        local position = startPosition:Lerp(target, alpha)
+        connection:Disconnect()
 
-        stopPart(root)
-        root.CFrame = CFrame.new(position.X, position.Y, position.Z)
-        task.wait(MOTION_TICK)
+        if movementError then
+            return false, movementError
+        end
+    else
+        while tick() - startedAt < duration do
+            if not world3MayContinue(forceRun, token) then
+                stopPart(root)
+                return false, "Stopped"
+            end
+
+            root = getRoot()
+
+            if not root then
+                return false, "Character was replaced"
+            end
+
+            local actual = root.Position
+            if (actual - lastCommanded).Magnitude > 12 then
+                reportTpCorrection(
+                    "during_tween",
+                    actual,
+                    lastCommanded,
+                    target,
+                    movementSpeed
+                )
+                stopPart(root)
+                return false, "Movement was corrected"
+            end
+
+            local alpha = math.min((tick() - startedAt) / duration, 1)
+            local position = startPosition:Lerp(target, alpha)
+
+            stopPart(root)
+            root.CFrame = CFrame.new(position.X, position.Y, position.Z)
+            rememberTpCommand(target, position, movementSpeed)
+            lastCommanded = position
+            task.wait(MOTION_TICK)
+        end
     end
 
     root = getRoot()
@@ -416,9 +740,17 @@ local function tweenWorld3(target, forceRun, token, dwell, speed)
 
     stopPart(root)
     root.CFrame = CFrame.new(target.X, target.Y, target.Z)
+    rememberTpCommand(target, target, movementSpeed)
     task.wait(dwell or 0.2)
 
     if (root.Position - target).Magnitude > 12 then
+        reportTpCorrection(
+            "after_tween",
+            root.Position,
+            target,
+            target,
+            movementSpeed
+        )
         return false, "Movement was corrected"
     end
 
@@ -439,10 +771,12 @@ local function moveWorld3Physics(target, forceRun, token, dwell)
             return false, "Character unavailable"
         end
 
+        local rootPosition = root.Position
+        local velocity = root.AssemblyLinearVelocity
         local offset = Vector3.new(
-            target.X - root.Position.X,
+            target.X - rootPosition.X,
             0,
-            target.Z - root.Position.Z
+            target.Z - rootPosition.Z
         )
 
         if offset.Magnitude <= 3 then
@@ -451,10 +785,11 @@ local function moveWorld3Physics(target, forceRun, token, dwell)
             return true
         end
 
+        local direction = offset.Unit
         root.AssemblyLinearVelocity = Vector3.new(
-            offset.Unit.X * 100,
-            root.AssemblyLinearVelocity.Y,
-            offset.Unit.Z * 100
+            direction.X * 100,
+            velocity.Y,
+            direction.Z * 100
         )
         task.wait(MOTION_TICK)
     end
@@ -490,10 +825,12 @@ local function enterWorld3WinPlate(
             return false
         end
 
+        local rootPosition = root.Position
+        local velocity = root.AssemblyLinearVelocity
         local offset = Vector3.new(
-            target.X - root.Position.X,
+            target.X - rootPosition.X,
             0,
-            target.Z - root.Position.Z
+            target.Z - rootPosition.Z
         )
 
         if offset.Magnitude <= 1.5 then
@@ -502,10 +839,11 @@ local function enterWorld3WinPlate(
             break
         end
 
+        local direction = offset.Unit
         root.AssemblyLinearVelocity = Vector3.new(
-            offset.Unit.X * 70,
-            root.AssemblyLinearVelocity.Y,
-            offset.Unit.Z * 70
+            direction.X * 70,
+            velocity.Y,
+            direction.Z * 70
         )
         task.wait(MOTION_TICK)
     end
@@ -560,6 +898,35 @@ local function waitForWorld3Reset(forceRun, token)
     return false
 end
 
+local function isStage7TsunamiLaunchReady(tsunamiModel, tsunami)
+    local spawn = tsunamiModel:FindFirstChild("TsunamiSpawn")
+    local finish = tsunamiModel:FindFirstChild("TsunamiEnd")
+    local travelTime = tsunamiModel:GetAttribute("TravelTime")
+
+    if spawn
+        and spawn:IsA("BasePart")
+        and finish
+        and finish:IsA("BasePart")
+        and type(travelTime) == "number"
+        and travelTime > 0
+    then
+        local travelDistance = (finish.Position - spawn.Position).Magnitude
+
+        if travelDistance > 0 then
+            local tsunamiSpeed = travelDistance / travelTime
+            local remainingTime = (finish.Position - tsunami.Position).Magnitude
+                / tsunamiSpeed
+
+            return remainingTime >= STAGE7_HAZARD.tsunamiMinRemaining
+                and remainingTime <= STAGE7_HAZARD.tsunamiMaxRemaining
+        end
+    end
+
+    local tsunamiX = tsunami.Position.X
+    return tsunamiX > STAGE7_HAZARD.fallbackMinX
+        and tsunamiX < STAGE7_HAZARD.fallbackMaxX
+end
+
 local function waitForWorld3TsunamiWindow(forceRun, token)
     local deadline = tick() + 8
 
@@ -581,9 +948,7 @@ local function waitForWorld3TsunamiWindow(forceRun, token)
             return false, "Tsunami not found"
         end
 
-        local tsunamiX = tsunami.Position.X
-
-        if tsunamiX < -1625 and tsunamiX > -1725 then
+        if isStage7TsunamiLaunchReady(tsunamiModel, tsunami) then
             return true
         end
 
@@ -593,108 +958,6 @@ local function waitForWorld3TsunamiWindow(forceRun, token)
     return false, "No safe tsunami window detected"
 end
 
-local function forceWorld3VoidRecovery(forceRun, token)
-    assert(world3MayContinue(forceRun, token), "Stopped")
-
-    if world3.voidRecoveryPending or not world3.autoVoidRecovery then
-        return false
-    end
-
-    local character = player.Character
-    local root = getRoot()
-    local humanoid = character
-        and character:FindFirstChildOfClass("Humanoid")
-
-    if not character or not root then
-        return false
-    end
-
-    world3.voidRecoveryPending = true
-    world3.status = "Forcing character reset"
-    world3.point = "Reset"
-    world3.spawnPosition = nil
-
-    assert(world3MayContinue(forceRun, token), "Stopped")
-    local killed = pcall(function()
-        if humanoid then
-            humanoid.Health = 0
-            humanoid:ChangeState(Enum.HumanoidStateType.Dead)
-        end
-        character:BreakJoints()
-    end)
-
-    if not killed then
-        world3.voidRecoveryPending = false
-        return false
-    end
-
-    local deadline = tick() + 15
-    local lastDropAt = tick()
-
-    while tick() < deadline do
-        assert(world3MayContinue(forceRun, token), "Stopped")
-
-        local currentRoot = getRoot()
-        local currentPosition = currentRoot and currentRoot.Position
-        local atSpawn = currentPosition
-            and currentPosition.Y > -300
-            and currentPosition.Y < -120
-            and currentPosition.Z < -900
-
-        if atSpawn then
-            world3.status = "Verifying void recovery"
-            world3.point = "Spawn"
-            task.wait(0.5)
-            local recovered = waitForWorld3Spawn(forceRun, token)
-            if not recovered then
-                world3.voidRecoveryPending = false
-            end
-            return recovered
-        elseif tick() - lastDropAt >= 0.4 then
-            pcall(function()
-                stopPart(root)
-                root.Position = Vector3.new(
-                    root.Position.X,
-                    -1000,
-                    -1000
-                )
-                root.AssemblyLinearVelocity = Vector3.new(
-                    0,
-                    -250,
-                    0
-                )
-            end)
-
-            if not currentRoot then
-                pcall(function()
-                    character:BreakJoints()
-                end)
-            end
-
-            lastDropAt = tick()
-        end
-
-        task.wait(0.1)
-    end
-
-    world3.voidRecoveryPending = false
-    return false
-end
-
-local function confirmWorld3RewardHealth()
-    if not world3.voidRecoveryPending then
-        return
-    end
-
-    world3.voidRecoveryPending = false
-    world3.voidRecoveries = world3.voidRecoveries + 1
-    Lib:Notify(
-        "Void Recovery",
-        "Wins collection restored.",
-        4,
-        "success"
-    )
-end
 
 local function getWorld3Stage1WinBlock()
     local structure = workspace:FindFirstChild("Structure")
@@ -709,14 +972,14 @@ local function getWorld3Stage1WinBlock()
     return nil
 end
 
-local function runWorld3Stage1Attempt(forceRun, token)
+
+local function runWorld3Stage1Cycle(forceRun, token)
     if not waitForWorld3Spawn(forceRun, token) then
         assert(world3MayContinue(forceRun, token), "Stopped")
         error("No stable spawn found")
     end
 
     local safeStart = WORLD3_ROUTE[1]
-
     world3.status = "Moving to Safe Start"
     world3.point = "Stage1SafeStart"
 
@@ -726,29 +989,21 @@ local function runWorld3Stage1Attempt(forceRun, token)
         token,
         safeStart.dwell
     )
-
     assert(safe, "Safe Start: " .. tostring(safeError))
 
     local cashValue = getWorld3Wins()
     local winBlock = getWorld3Stage1WinBlock()
-
     assert(cashValue, "Wins value unavailable")
     assert(winBlock, "WinBlock32 not found")
 
-    local root = getRoot()
-    assert(root, "Character unavailable")
-    local stage1Entry = WORLD3_ROUTE[2].position
-    local cashBefore = cashValue.Value
-
-    world3.status = "Going directly to Stage 1"
-    world3.point = "Stage 1 Entrance"
+    local stage1Entry = WORLD3_ROUTE[4].position
     local reachedStage1 = false
 
     for attempt = 1, 3 do
         assert(world3MayContinue(forceRun, token), "Stopped")
-        root = getRoot()
+        local root = getRoot()
         assert(root, "Character unavailable")
-
+        stopPart(root)
         root.CFrame = CFrame.new(
             stage1Entry.X,
             stage1Entry.Y,
@@ -758,95 +1013,55 @@ local function runWorld3Stage1Attempt(forceRun, token)
         task.wait(0.08)
 
         root = getRoot()
-
         if root and (root.Position - stage1Entry).Magnitude <= 15 then
             reachedStage1 = true
             break
         end
-
-        if attempt < 3 then
-            world3.status = string.format(
-                "Stage 1 attempt %d/3",
-                attempt + 1
-            )
-        end
     end
 
-    if not reachedStage1 then
-        stopRoot()
-        world3.status = "Correcting Stage 1 teleport"
-        world3.point = "Recovery"
+    assert(reachedStage1, "Stage 1 entrance was corrected")
 
-        if world3.autoVoidRecovery then
-            if world3.voidRecoveryPending then
-                error("Position correction remained after void recovery")
-            end
+    local holdPosition = winBlock.Position + Vector3.new(0, 1.5, 0)
+    local holdCFrame = CFrame.new(
+        holdPosition.X,
+        holdPosition.Y,
+        holdPosition.Z
+    )
+    local cashBefore = cashValue.Value
+    local RunService = game:GetService("RunService")
+    local root = getRoot()
+    assert(root, "Character unavailable")
+    stopPart(root)
+    root.CFrame = holdCFrame
+    stopPart(root)
 
-            if forceWorld3VoidRecovery(forceRun, token) then
-                return false
-            end
+    world3.status = "Holding inside WinBlock32"
+    world3.point = "WinBlock32 Hold"
 
-            error("Void recovery failed")
-        end
-
-        repeat
-            assert(world3MayContinue(forceRun, token), "Stopped")
-            world3.status = "Returning to spawn"
-            task.wait(0.5)
-        until returnToWorld3Spawn()
-
-        return false
-    end
-
-    local walkTarget = winBlock.Position
-    local walkSpeed = 60
-
-    if world3.lastRewardAt then
-        local estimatedWalkTime = (
-            Vector3.new(
-                walkTarget.X - root.Position.X,
-                0,
-                walkTarget.Z - root.Position.Z
-            ).Magnitude
-        ) / walkSpeed
-        local walkAt = world3.lastRewardAt
-            + WORLD3_STAGE1_REWARD_INTERVAL
-            - estimatedWalkTime
-
-        world3.status = "Waiting for movement window"
-
-        while tick() < walkAt do
-            assert(world3MayContinue(forceRun, token), "Stopped")
-            task.wait(math.max(
-                0.001,
-                math.min(POLL_TICK, walkAt - tick())
-            ))
-        end
-    end
-
-    world3.status = "Moving to WinBlock32"
-    world3.point = "WinBlock32"
-    local rewardDeadline = tick() + 2.5
-    local lastDistance = math.huge
-    local lastProgressAt = tick()
-
-    while tick() < rewardDeadline do
+    local holdConnection = RunService.RenderStepped:Connect(function()
         if not world3MayContinue(forceRun, token) then
-            stopRoot()
-            error("Stopped")
+            return
         end
 
-        if cashValue.Value ~= cashBefore then
-            stopRoot()
-            local reward = cashDelta(cashValue.Value, cashBefore)
+        local liveRoot = getRoot()
+        if liveRoot
+            and (liveRoot.Position - holdPosition).Magnitude > 2
+        then
+            stopPart(liveRoot)
+            liveRoot.CFrame = holdCFrame
+            stopPart(liveRoot)
+        end
+    end)
 
+    while world3MayContinue(forceRun, token) do
+        if cashValue.Value ~= cashBefore then
+            local reward = cashDelta(cashValue.Value, cashBefore)
+            cashBefore = cashValue.Value
             world3.cycles = world3.cycles + 1
             world3.earned = world3.earned + reward
             world3.lastReward = reward
             world3.lastRewardAt = tick()
-            world3.status = "Stage 1 reward confirmed"
-            confirmWorld3RewardHealth()
-
+            world3.status = "Stage 1 hold reward confirmed"
             Lib:Notify(
                 "World 3 Stage 1",
                 "+" .. formatNumber(reward) .. " Wins",
@@ -854,84 +1069,23 @@ local function runWorld3Stage1Attempt(forceRun, token)
                 "success"
             )
 
-            if not waitForWorld3Reset(forceRun, token) then
-                assert(world3MayContinue(forceRun, token), "Stopped")
-                error("Spawn reset not detected")
+            if forceRun then
+                holdConnection:Disconnect()
+                task.wait(0.2)
+                stopRoot()
+                returnToWorld3Spawn()
+                return
             end
 
-            return true
+            world3.status = "Holding inside WinBlock32"
         end
 
-        root = getRoot()
-
-        if not root then
-            error("Character unavailable")
-        end
-
-        local offset = Vector3.new(
-            walkTarget.X - root.Position.X,
-            0,
-            walkTarget.Z - root.Position.Z
-        )
-
-        if offset.Magnitude > 0.5 then
-            local liveDirection = offset.Unit
-            local vertical = root.AssemblyLinearVelocity.Y
-
-            if offset.Magnitude < lastDistance - 0.25 then
-                lastDistance = offset.Magnitude
-                lastProgressAt = tick()
-            elseif tick() - lastProgressAt > 0.35 then
-                vertical = 32
-                lastProgressAt = tick()
-            end
-
-            root.AssemblyLinearVelocity = Vector3.new(
-                liveDirection.X * walkSpeed,
-                vertical,
-                liveDirection.Z * walkSpeed
-            )
-        else
-            stopPart(root)
-        end
-
-        task.wait(MOTION_TICK)
+        task.wait(0.05)
     end
 
+    holdConnection:Disconnect()
     stopRoot()
-
-    if world3.autoVoidRecovery then
-        if world3.voidRecoveryPending then
-            error("Wins still unavailable after void recovery")
-        end
-
-        if forceWorld3VoidRecovery(forceRun, token) then
-            return false
-        end
-
-        error("Void recovery failed")
-    end
-
-    error("WinBlock32 reward not detected")
-end
-
-local function runWorld3Stage1Cycle(forceRun, token)
-    local recoveries = 0
-
-    while world3MayContinue(forceRun, token) do
-        if runWorld3Stage1Attempt(forceRun, token) then
-            return
-        end
-
-        recoveries = recoveries + 1
-        world3.status = string.format(
-            "Stage 1 Recovery %d",
-            recoveries
-        )
-        world3.point = "Spawn"
-        task.wait(math.min(0.5 + recoveries * 0.15, 2))
-    end
-
+    returnToWorld3Spawn()
     error("Stopped")
 end
 
@@ -994,48 +1148,55 @@ local function runWorld3WinBlock35Cycle(forceRun, token)
                 point.dwell
             )
         else
-            for attempt = 1, 3 do
+            local targetPosition = point.hazardPosition or point.position
+            local movementSpeed = point.hazardSpeed
+                or (
+                    point.minimumSpeed
+                        and math.max(world3.speed, point.minimumSpeed)
+                    or world3.speed
+                )
+            local retryStartedAt = tick()
+            local retryRoot = getRoot()
+            local nominalDuration = retryRoot
+                    and (targetPosition - retryRoot.Position).Magnitude
+                        / math.max(movementSpeed, 1)
+                or 0
+            local retryDeadline = retryStartedAt
+                + math.max(12, nominalDuration * 6)
+            local attempt = 0
+
+            while true do
+                attempt = attempt + 1
                 moved, moveError = tweenWorld3(
-                    point.position,
+                    targetPosition,
                     forceRun,
                     token,
                     point.dwell,
-                    point.minimumSpeed
-                        and math.max(world3.speed, point.minimumSpeed)
-                        or nil
+                    movementSpeed
                 )
 
                 if moved or moveError ~= "Movement was corrected" then
                     break
                 end
 
-                if world3.autoVoidRecovery then
+                if tick() >= retryDeadline then
+                    moveError = string.format(
+                        "Movement remained corrected for %.1fs after %d attempts",
+                        tick() - retryStartedAt,
+                        attempt
+                    )
                     break
                 end
 
                 world3.status = string.format(
-                    "%s: attempt %d/3",
+                    "%s: retry %d",
                     point.name,
                     attempt + 1
                 )
-                task.wait(0.2)
+                task.wait(point.hazardSpeed and 0.05 or 0.2)
             end
         end
 
-        if not moved
-            and moveError == "Movement was corrected"
-            and world3.autoVoidRecovery
-        then
-            if world3.voidRecoveryPending then
-                error("Position correction remained after void recovery")
-            end
-
-            assert(
-                forceWorld3VoidRecovery(forceRun, token),
-                "Void recovery failed"
-            )
-            return runWorld3WinBlock35Cycle(forceRun, token)
-        end
 
         assert(moved, point.name .. ": " .. tostring(moveError))
     end
@@ -1057,20 +1218,6 @@ local function runWorld3WinBlock35Cycle(forceRun, token)
         winPlate,
         stageLabel
     ) then
-        assert(world3MayContinue(forceRun, token), "Stopped")
-
-        if world3.autoVoidRecovery then
-            if world3.voidRecoveryPending then
-                error("Wins still unavailable after void recovery")
-            end
-
-            assert(
-                forceWorld3VoidRecovery(forceRun, token),
-                "Void recovery failed"
-            )
-            return runWorld3WinBlock35Cycle(forceRun, token)
-        end
-
         error("Reward not detected")
     end
 
@@ -1082,7 +1229,6 @@ local function runWorld3WinBlock35Cycle(forceRun, token)
     world3.lastRewardAt = tick()
     world3.status = "Reward confirmed"
     world3.point = stageLabel
-    confirmWorld3RewardHealth()
 
     Lib:Notify(
         "World 3 " .. stageLabel,
@@ -1149,7 +1295,6 @@ local function runWorld3(forceRun)
             world3.point = world3.auto and "Spawn" or "Complete"
         else
             local message = cleanError(failure)
-            world3.voidRecoveryPending = false
 
             if not string.find(message, "Stopped", 1, true) then
                 world3.status = "Error: " .. message
@@ -1166,32 +1311,626 @@ end
 local function stopWorld3()
     world3.auto = false
     world3.runToken = world3.runToken + 1
-    world3.voidRecoveryPending = false
     world3.status = "Stopped"
     world3.point = "-"
     stopRoot()
 end
 
 local events = {
-    enabled = { summer = false, battle = false, disco = false },
-    retry = { summer = 2, battle = 2, disco = 2 },
-    retryAt = setmetatable({}, { __mode = "k" }),
-    counts = { summer = 0, battle = 0, disco = 0, total = 0 },
+    enabled = {
+        summer = false,
+        battle = false,
+        disco = false,
+        masked = false
+    },
+    retry = { summer = 2, battle = 2, disco = 2, masked = 2 },
+    retryAt = {},
+    maskedRetryAt = {},
+    counts = {
+        summer = 0,
+        battle = 0,
+        disco = 0,
+        masked = 0,
+        total = 0
+    },
     status = "Ready",
     current = "-",
     running = false,
     runToken = 0,
     homePosition = nil,
-    atHome = true
+    atHome = true,
+    tpHistory = {},
+    lastTpAt = nil,
+    rewardLockSignal = nil,
+    summerOnlyStorm = false,
+    summerStormUntil = 0,
+    summerStormNoticeScanAt = 0,
+    summerStormAnnouncement = nil,
+    nextTargetScanAt = 0,
+    minTeleportInterval = 10,
+    travelRoute = {},
+    teleportDistanceBudget10s = 1000,
+    maxTeleportDistance = 1000,
+    maskedActive = false,
+    maskedMapAddress = nil,
+    maskedScanAt = 0,
+    maskedPadScanAt = 0,
+    maskedPadLabel = nil,
+    maskedPadPart = nil,
+    maskedScanPending = false
 }
+function events.retryKey(kind, model)
+    return kind
+        .. ":"
+        .. tostring((model and model.Address) or (model and model.Name))
+end
+
+
+for _, point in ipairs(WORLD3_STAGE7_ROUTE) do
+    table.insert(events.travelRoute, point)
+end
+
+for _, point in ipairs({
+    {
+        name = "Stage 7 Ramp 1",
+        position = Vector3.new(-2130.1968, 443.0, 1486.1375)
+    },
+    {
+        name = "Stage 7 Ramp 2",
+        position = Vector3.new(-2302.0222, 443.0, 1486.1375)
+    },
+    {
+        name = "Stage 7 Ramp 3",
+        position = Vector3.new(-2441.5222, 443.0, 1486.1375)
+    },
+    {
+        name = "Stage 8 Floor",
+        position = Vector3.new(-3059.9753, 675.6495, 1503.9557)
+    },
+    {
+        name = "Stage 9 Floor",
+        position = Vector3.new(-4049.3909, 620.9781, 1483.2378)
+    }
+}) do
+    table.insert(events.travelRoute, point)
+end
 
 local function anyEventEnabled()
     return events.enabled.summer
         or events.enabled.battle
         or events.enabled.disco
+        or events.enabled.masked
 end
 
-local function eventConfirmed(model, kind)
+local function recordEventTeleport(kind, origin, destination)
+    local now = tick()
+    local history = events.tpHistory
+
+    while history[1] and now - history[1].at > 10 do
+        table.remove(history, 1)
+    end
+
+    local distance = (destination - origin).Magnitude
+    local interval = events.lastTpAt and now - events.lastTpAt or nil
+    local entry = { at = now, distance = distance }
+    table.insert(history, entry)
+    events.lastTpAt = now
+
+    local count1 = 0
+    local count3 = 0
+    local distance10 = 0
+    for _, item in ipairs(history) do
+        local age = now - item.at
+        if age <= 1 then
+            count1 = count1 + 1
+        end
+        if age <= 3 then
+            count3 = count3 + 1
+        end
+        distance10 = distance10 + item.distance
+    end
+
+    local snapshot = {
+        kind = kind,
+        origin = vectorRecord(origin),
+        destination = vectorRecord(destination),
+        distance = distance,
+        interval = interval,
+        count1s = count1,
+        count3s = count3,
+        count10s = #history,
+        distance10s = distance10
+    }
+    writeTpDiagnostic("event_teleport", snapshot)
+    rememberTpCommand(destination, destination, nil)
+    return snapshot
+end
+
+local function stopEventsForRewardRisk(message)
+    events.enabled.summer = false
+    events.enabled.battle = false
+    events.enabled.disco = false
+    events.enabled.masked = false
+    events.runToken = events.runToken + 1
+    events.running = false
+    events.status = message
+    world3.eventsActive = false
+    stopRoot()
+    Lib:Notify("TP Safety", message, 5, "warning")
+end
+
+local function detectEventRubberband(origin, destination, snapshot)
+    for _ = 1, 6 do
+        task.wait(0.05)
+        local root = getRoot()
+        if not root then
+            return false
+        end
+
+        local actual = root.Position
+        local targetDistance = (actual - destination).Magnitude
+        local originDistance = (actual - origin).Magnitude
+        if targetDistance > 30 and originDistance < targetDistance then
+            snapshot.actual = vectorRecord(actual)
+            snapshot.targetDistance = targetDistance
+            snapshot.originDistance = originDistance
+            writeTpDiagnostic("event_rubberband", snapshot)
+            warn(string.format(
+                "[Celestial TP] event rubberband: %d TP/1s, %d TP/3s",
+                snapshot.count1s,
+                snapshot.count3s
+            ))
+            stopEventsForRewardRisk(
+                "Rubberband detected; collectors stopped to protect WinPlates."
+            )
+            return true
+        end
+    end
+
+    return false
+end
+
+local function moveEventSafely(
+    kind,
+    origin,
+    destination,
+    token,
+    allowStopped,
+    targetPart,
+    targetOffset
+)
+    local offset = targetOffset or Vector3.new(0, 0, 0)
+    local distance
+
+    while true do
+        if generation ~= _G.CelestialFarmGeneration
+            or token ~= events.runToken
+            or (not allowStopped and not events.enabled[kind])
+            or (targetPart and not targetPart.Parent)
+        then
+            return false
+        end
+        if targetPart then
+            destination = targetPart.Position + offset
+        end
+
+        distance = (destination - origin).Magnitude
+        if distance > events.maxTeleportDistance then
+            return false
+        end
+
+
+        local now = tick()
+        local history = events.tpHistory
+        while history[1] and now - history[1].at > 10 do
+            table.remove(history, 1)
+        end
+
+        local distance10 = 0
+        for _, entry in ipairs(history) do
+            distance10 = distance10 + entry.distance
+        end
+
+        local intervalReady = not events.lastTpAt
+            or now - events.lastTpAt >= events.minTeleportInterval
+        local budgetReady = distance10 + distance
+            <= events.teleportDistanceBudget10s
+
+        if intervalReady and budgetReady then
+            break
+        elseif kind == "masked" and targetPart then
+            events.status = "Waiting for direct TP safety window"
+            return false
+        end
+
+        events.status = "Waiting for direct TP safety window"
+        task.wait(0.1)
+    end
+
+    local root = getRoot()
+    if not root then
+        return false
+    end
+
+    local snapshot = recordEventTeleport(kind, origin, destination)
+    stopPart(root)
+    root.Position = destination
+    stopPart(root)
+
+    return not detectEventRubberband(origin, destination, snapshot)
+end
+
+local function waitForEventTsunamiWindow(kind, token, allowStopped)
+    local deadline = tick() + 8
+
+    while tick() < deadline do
+        if generation ~= _G.CelestialFarmGeneration
+            or token ~= events.runToken
+            or (not allowStopped and not events.enabled[kind])
+        then
+            return false
+        end
+
+        local hazards = workspace:FindFirstChild("NPC & Piege")
+        local tsunamiModel = hazards and hazards:FindFirstChild("Tsunami1")
+        local tsunami = tsunamiModel and tsunamiModel:FindFirstChild("Tsunami")
+
+        if tsunami
+            and tsunami:IsA("BasePart")
+            and isStage7TsunamiLaunchReady(tsunamiModel, tsunami)
+        then
+            return true
+        end
+
+        task.wait(0.02)
+    end
+
+    return false
+end
+
+local function moveEventRoutePoint(kind, point, token, allowStopped)
+    local root = getRoot()
+    if not root then
+        return false
+    end
+
+    local startPosition = root.Position
+    local target = point.hazardPosition or point.position
+    local distance = (target - startPosition).Magnitude
+    local movementSpeed = point.hazardSpeed
+        or (
+            point.minimumSpeed
+                and math.max(world3.speed, point.minimumSpeed)
+            or world3.speed
+        )
+    local duration = distance / math.max(movementSpeed, 1)
+    local startedAt = tick()
+    local lastCommanded = startPosition
+
+    while tick() - startedAt < duration do
+        if generation ~= _G.CelestialFarmGeneration
+            or token ~= events.runToken
+            or (not allowStopped and not events.enabled[kind])
+        then
+            stopPart(root)
+            return false
+        end
+
+        root = getRoot()
+        if not root then
+            return false
+        end
+
+        local actual = root.Position
+        if (actual - lastCommanded).Magnitude > 12 then
+            writeTpDiagnostic("position_correction", {
+                kind = kind,
+                phase = "event_route",
+                actual = vectorRecord(actual),
+                commanded = vectorRecord(lastCommanded),
+                target = vectorRecord(target),
+                speed = movementSpeed
+            })
+            stopPart(root)
+            stopEventsForRewardRisk(
+                "Route correction detected; collectors stopped"
+            )
+            return false
+        end
+
+        local alpha = math.min((tick() - startedAt) / duration, 1)
+        local position = startPosition:Lerp(target, alpha)
+        stopPart(root)
+        root.CFrame = CFrame.new(position.X, position.Y, position.Z)
+        lastCommanded = position
+        task.wait(MOTION_TICK)
+    end
+
+    root = getRoot()
+    if not root then
+        return false
+    end
+
+    stopPart(root)
+    root.CFrame = CFrame.new(target.X, target.Y, target.Z)
+    task.wait(point.dwell or 0.2)
+
+    if (root.Position - target).Magnitude > 12 then
+        writeTpDiagnostic("position_correction", {
+            kind = kind,
+            phase = "event_route_final",
+            actual = vectorRecord(root.Position),
+            commanded = vectorRecord(target),
+            target = vectorRecord(target),
+            speed = movementSpeed
+        })
+        stopEventsForRewardRisk(
+            "Route correction detected; collectors stopped"
+        )
+        return false
+    end
+
+    return true
+end
+
+local function stageEventTravel(kind, destination, token, allowStopped)
+    local root = getRoot()
+    if not root then
+        return false
+    end
+
+    local origin = root.Position
+    local route = events.travelRoute
+    local currentIndex = 1
+    local targetIndex = 1
+    local currentDistance = math.huge
+    local targetDistance = math.huge
+
+    for index, point in ipairs(route) do
+        local fromCurrent = (point.position - origin).Magnitude
+        local fromTarget = (point.position - destination).Magnitude
+
+        if fromCurrent < currentDistance then
+            currentDistance = fromCurrent
+            currentIndex = index
+        end
+        if fromTarget < targetDistance then
+            targetDistance = fromTarget
+            targetIndex = index
+        end
+    end
+
+    local nextIndex
+    if targetIndex > currentIndex then
+        nextIndex = currentIndex + 1
+    elseif targetIndex < currentIndex then
+        nextIndex = currentIndex - 1
+    elseif destination.X < origin.X and currentIndex < #route then
+        nextIndex = currentIndex + 1
+    elseif currentIndex > 1 then
+        nextIndex = currentIndex - 1
+    else
+        return false
+    end
+
+    local point = route[nextIndex]
+    if not point
+        or (point.position - origin).Magnitude > events.maxTeleportDistance
+    then
+        return false
+    end
+
+    if point.tsunamiWindow
+        and not waitForEventTsunamiWindow(
+            kind,
+            token,
+            allowStopped == true
+        )
+    then
+        events.status = "Waiting for safe tsunami route"
+        return false
+    end
+
+    events.atHome = false
+    events.current = point.name
+    events.status = "Traveling across map"
+    writeTpDiagnostic("event_route_stage", {
+        kind = kind,
+        routeIndex = nextIndex,
+        routePoint = point.name,
+        destination = vectorRecord(destination)
+    })
+
+    return moveEventRoutePoint(
+        kind,
+        point,
+        token,
+        allowStopped == true
+    )
+end
+
+
+local function summerCoinCount()
+    local folder = workspace:FindFirstChild("SummerCoinsLocal")
+    local count = 0
+
+    if folder then
+        for _, model in ipairs(folder:GetChildren()) do
+            if model:IsA("Model")
+                and model.Name == "SummerCoin"
+                and model:FindFirstChild("Coin", true)
+            then
+                count = count + 1
+            end
+        end
+    end
+
+    return count
+end
+
+local function monitorSummerStormNotice()
+    local now = tick()
+    if now < events.summerStormNoticeScanAt then
+        return
+    end
+
+    events.summerStormNoticeScanAt = now + 1
+
+    local playerGui = player:FindFirstChild("PlayerGui")
+    local announcement
+
+    if playerGui then
+        for _, item in ipairs(playerGui:GetDescendants()) do
+            if item:IsA("TextLabel")
+                and item.Name == "CenterMessage"
+                and type(item.Text) == "string"
+            then
+                local text = string.lower(item.Text)
+                if string.find(text, "coin", 1, true)
+                    and string.find(text, "storm", 1, true)
+                then
+                    announcement = item.Text
+                    if string.find(text, "stop", 1, true)
+                        or string.find(text, "end", 1, true)
+                        or string.find(text, "over", 1, true)
+                        or string.find(text, "finish", 1, true)
+                    then
+                        events.summerStormUntil = 0
+                    else
+                        events.summerStormUntil = now + 90
+                    end
+                    break
+                end
+            end
+        end
+    end
+
+    if announcement ~= events.summerStormAnnouncement then
+        events.summerStormAnnouncement = announcement
+        if announcement then
+            writeTpDiagnostic("summer_storm_notice", {
+                active = now < events.summerStormUntil,
+                announcement = announcement
+            })
+        end
+    end
+end
+
+local function summerStormActive()
+    monitorSummerStormNotice()
+    return tick() < events.summerStormUntil, summerCoinCount()
+end
+
+local function isEventBasePart(value)
+    local className = value and value.ClassName
+    return className == "Part"
+        or className == "MeshPart"
+        or className == "UnionOperation"
+        or className == "WedgePart"
+        or className == "CornerWedgePart"
+        or className == "TrussPart"
+        or className == "Seat"
+        or className == "VehicleSeat"
+end
+
+local MASKED_SUFFIX_MULTIPLIERS = {
+    K = 1e3,
+    M = 1e6,
+    B = 1e9,
+    T = 1e12,
+    QA = 1e15,
+    QI = 1e18,
+    SX = 1e21,
+    SP = 1e24,
+    OC = 1e27,
+    NO = 1e30,
+    DC = 1e33,
+    UD = 1e36,
+    DD = 1e39,
+    TD = 1e42,
+    QAD = 1e45,
+    QID = 1e48,
+    SXD = 1e51,
+    SPD = 1e54,
+    OD = 1e57,
+    ND = 1e60,
+    VG = 1e63
+}
+
+local function maskedPayoutFromText(text)
+    if type(text) ~= "string" then
+        return 0
+    end
+
+    local compact = string.upper(string.gsub(text, "%s+", ""))
+    local amount, suffix = string.match(
+        compact,
+        "^([%d%.]+)([%a]*)WINS$"
+    )
+    amount = tonumber(amount)
+    if not amount then
+        return 0
+    end
+
+    if suffix == "" then
+        return amount
+    end
+
+    local multiplier = MASKED_SUFFIX_MULTIPLIERS[suffix]
+    return multiplier and amount * multiplier or 0
+end
+
+local function findMaskedWinPad(primaryRoot, presentationRoot)
+    for rootIndex = 1, 2 do
+        local root = rootIndex == 1 and primaryRoot or presentationRoot
+        if root then
+            for _, item in ipairs(root:GetDescendants()) do
+                if item.ClassName == "TextLabel" then
+                    local payout = maskedPayoutFromText(item.Text)
+                    if payout > 0 then
+                        local gui = item.Parent
+                        while gui
+                            and gui ~= root
+                            and gui.ClassName ~= "BillboardGui"
+                            and gui.ClassName ~= "SurfaceGui"
+                        do
+                            gui = gui.Parent
+                        end
+
+                        local ancestor = (
+                            gui
+                            and (gui.ClassName == "BillboardGui"
+                                or gui.ClassName == "SurfaceGui")
+                        ) and gui.Parent or item.Parent
+                        while ancestor and ancestor ~= root.Parent do
+                            if isEventBasePart(ancestor) then
+                                return item, ancestor
+                            end
+                            ancestor = ancestor.Parent
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return nil, nil
+end
+
+
+local function eventConfirmed(model, kind, target)
+    if kind == "masked"
+        and target
+        and target.id
+        and target.id.type == "pad"
+    then
+        local cashValue = getWorld3Wins()
+        local wins = cashValue and cashValue.Value
+        return wins ~= nil
+            and target.winsBefore ~= nil
+            and wins ~= target.winsBefore
+    end
+
     if not model.Parent then
         return true
     end
@@ -1214,23 +1953,41 @@ local function findNearestEventTarget()
         return nil
     end
 
-    local nearest
+    local rootPosition = root.Position
+    local nearestKind
+    local nearestModel
+    local nearestPart
+    local nearestId
+    local nearestRetryKey
     local nearestDistance = math.huge
     local now = tick()
+    events.maskedScanPending = false
+    local summerStormIsActive
     local function consider(kind, model, part, id)
-        if part and part:IsA("BasePart")
+        local retryKey = kind ~= "masked"
+                and events.retryKey(kind, model)
+            or nil
+        local retryAt = kind == "masked"
+                and id
+                and events.maskedRetryAt[id.key]
+            or (retryKey and events.retryAt[retryKey])
+
+        if retryKey and retryAt and retryAt <= now then
+            events.retryAt[retryKey] = nil
+        end
+
+        if isEventBasePart(part)
             and model.Parent
-            and (events.retryAt[model] or 0) <= now
+            and (retryAt or 0) <= now
         then
-            local distance = (part.Position - root.Position).Magnitude
+            local distance = (part.Position - rootPosition).Magnitude
 
             if distance < nearestDistance then
-                nearest = {
-                    kind = kind,
-                    model = model,
-                    part = part,
-                    id = id
-                }
+                nearestKind = kind
+                nearestModel = model
+                nearestPart = part
+                nearestId = id
+                nearestRetryKey = retryKey
                 nearestDistance = distance
             end
         end
@@ -1239,12 +1996,69 @@ local function findNearestEventTarget()
     if events.enabled.summer then
         local folder = workspace:FindFirstChild("SummerCoinsLocal")
 
-        if folder then
+        if events.summerOnlyStorm then
+            local scanned = 0
+            local visible = 0
+            local summerModel
+            local summerPart
+            local summerDistance = math.huge
+
+            if folder then
+                for _, model in ipairs(folder:GetChildren()) do
+                    if model:IsA("Model") and model.Name == "SummerCoin" then
+                        scanned = scanned + 1
+                        local coin = model:FindFirstChild("Coin", true)
+                        if coin then
+                            visible = visible + 1
+                            if coin:IsA("BasePart")
+                                and model.Parent
+                                and (
+                                    events.retryAt[
+                                        events.retryKey("summer", model)
+                                    ] or 0
+                                ) <= now
+                            then
+                                local distance = (
+                                    coin.Position - rootPosition
+                                ).Magnitude
+                                if distance < summerDistance then
+                                    summerModel = model
+                                    summerPart = coin
+                                    summerDistance = distance
+                                end
+                            end
+                        end
+                        if scanned >= 64 then
+                            break
+                        end
+                    end
+                end
+            end
+
+            monitorSummerStormNotice()
+            if visible >= 10 then
+                events.summerStormUntil = math.max(
+                    events.summerStormUntil,
+                    tick() + 5
+                )
+            end
+
+            summerStormIsActive = tick() < events.summerStormUntil
+
+            if summerStormIsActive and summerModel then
+                consider("summer", summerModel, summerPart)
+            end
+        elseif folder then
+            local scanned = 0
             for _, model in ipairs(folder:GetChildren()) do
                 if model:IsA("Model") and model.Name == "SummerCoin" then
+                    scanned = scanned + 1
                     local coin = model:FindFirstChild("Coin", true)
                     if coin and coin:IsA("BasePart") then
                         consider("summer", model, coin)
+                    end
+                    if scanned >= 64 then
+                        break
                     end
                 end
             end
@@ -1292,36 +2106,147 @@ local function findNearestEventTarget()
         end
     end
 
-    return nearest
-end
+    if events.enabled.masked then
+        local adminAbuse = workspace:FindFirstChild("AdminAbuse")
+        local mapFolder = adminAbuse and adminAbuse:FindFirstChild("Map")
+        local liveMap = mapFolder
+            and mapFolder:FindFirstChild("MaskedManColorMania_Live")
+        local mapAddress = liveMap and liveMap.Address or nil
 
-local function returnFromEvents()
-    if game.PlaceId == WORLD3_PLACE_ID then
-        local moved = returnToWorld3Spawn()
-
-        if moved then
-            events.atHome = true
-            events.current = "-"
+        if mapAddress ~= events.maskedMapAddress then
+            events.maskedMapAddress = mapAddress
+            events.maskedRetryAt = {}
+            events.maskedPadLabel = nil
+            events.maskedPadPart = nil
+            events.maskedScanAt = 0
+            events.maskedPadScanAt = 0
         end
 
-        return moved
+        events.maskedActive = liveMap ~= nil
+        if liveMap and now >= events.maskedScanAt then
+            events.maskedScanAt = now + 0.25
+
+            local maps = workspace:FindFirstChild("AdminAbuseMaps")
+            local presentation = maps
+                and maps:FindFirstChild("MaskedManColorMania")
+            local debris = presentation
+                and presentation:FindFirstChild("Debris")
+
+            if debris then
+                for _, object in ipairs(debris:GetChildren()) do
+                    if (object.Name == "CollectibleOrb"
+                            or object.Name == "BigCollectibleOrb")
+                        and isEventBasePart(object)
+                    then
+                        consider("masked", object, object, {
+                            type = "orb",
+                            key = tostring(object.Address)
+                        })
+                    end
+                end
+            else
+                for _, orbName in ipairs({
+                    "CollectibleOrb",
+                    "BigCollectibleOrb"
+                }) do
+                    local object = workspace:FindFirstChild(orbName)
+                    if isEventBasePart(object) then
+                        consider("masked", object, object, {
+                            type = "orb",
+                            key = tostring(object.Address)
+                        })
+                    end
+                end
+            end
+
+            local label = events.maskedPadLabel
+            local pad = events.maskedPadPart
+            if not label
+                or not label.Parent
+                or not pad
+                or not pad.Parent
+                or not isEventBasePart(pad)
+            then
+                events.maskedPadLabel = nil
+                events.maskedPadPart = nil
+                label = nil
+                pad = nil
+            end
+
+            if not label and now >= events.maskedPadScanAt then
+                events.maskedPadScanAt = now + 2
+                label, pad = findMaskedWinPad(liveMap, presentation)
+                events.maskedPadLabel = label
+                events.maskedPadPart = pad
+            end
+
+            if label
+                and pad
+                and maskedPayoutFromText(label.Text) > 0
+            then
+                consider("masked", pad, pad, {
+                    type = "pad",
+                    key = tostring(pad.Address)
+                })
+            end
+        elseif liveMap then
+            events.maskedScanPending = true
+        end
+    else
+        events.maskedActive = false
     end
 
+    if not nearestModel then
+        return nil, summerStormIsActive
+    end
+
+    return {
+        kind = nearestKind,
+        model = nearestModel,
+        part = nearestPart,
+        id = nearestId,
+        retryKey = nearestRetryKey
+    }, summerStormIsActive
+end
+
+local function returnFromEvents(token, allowStopped)
     local root = getRoot()
 
     if not root or not events.homePosition then
         return false
     end
 
-    local moved = pcall(function()
-        stopPart(root)
-        root.Position = events.homePosition
-        stopPart(root)
-    end)
+    events.status = "Waiting to return safely"
+    local origin = root.Position
+    local destination = events.homePosition
+    local kind = events.travelKind or "summer"
+    local travelDistance = (destination - origin).Magnitude
+    local staged = travelDistance > events.maxTeleportDistance
+    local moved
 
-    if moved then
+    if staged then
+        moved = stageEventTravel(
+            kind,
+            destination,
+            token or events.runToken,
+            allowStopped == true
+        )
+    else
+        moved = moveEventSafely(
+            kind,
+            origin,
+            destination,
+            token or events.runToken,
+            allowStopped == true
+        )
+    end
+
+    if moved and not staged then
         events.atHome = true
         events.current = "-"
+        events.travelKind = nil
+    elseif moved and staged and allowStopped == true then
+        events.returnPending = true
     end
 
     return moved
@@ -1338,16 +2263,64 @@ local function collectEventTarget(target, token)
         events.homePosition = root.Position
     end
 
-    events.atHome = false
     events.current = target.kind == "summer" and "Summer Coin"
         or target.kind == "battle" and "Coin Battle"
-        or "Disco Keycap"
-    events.status = "Collecting " .. events.current
+        or target.kind == "disco" and "Disco Keycap"
+        or target.id and target.id.type == "pad"
+            and "Masked Man Win Pad"
+        or "Masked Man Orb"
+    local origin = root.Position
+    local targetOffset = target.kind == "masked"
+            and Vector3.new(0, 1.5, 0)
+        or Vector3.new(0, 3, 0)
+    local destination = target.part.Position + targetOffset
+    local travelDistance = (destination - origin).Magnitude
 
-    pcall(function()
-        stopPart(root)
-        root.Position = target.part.Position + Vector3.new(0, 3, 0)
-    end)
+    if travelDistance > events.maxTeleportDistance then
+        events.atHome = false
+        events.travelKind = target.kind
+        events.status = string.format(
+            "Routing to distant %s (%.0f studs)",
+            events.current,
+            travelDistance
+        )
+        writeTpDiagnostic("event_route_requested", {
+            kind = target.kind,
+            distance = travelDistance,
+            destination = vectorRecord(destination)
+        })
+        return stageEventTravel(
+            target.kind,
+            destination,
+            token,
+            false
+        )
+    end
+
+    events.atHome = false
+    events.travelKind = target.kind
+    events.status = "Collecting " .. events.current
+    if target.kind == "masked"
+        and target.id
+        and target.id.type == "pad"
+    then
+        local cashValue = getWorld3Wins()
+        target.winsBefore = cashValue and cashValue.Value
+    end
+
+    local moved = moveEventSafely(
+        target.kind,
+        origin,
+        destination,
+        token,
+        false,
+        target.part,
+        targetOffset
+    )
+
+    if not moved then
+        return false
+    end
 
     if target.kind == "battle" and target.id ~= nil then
         pcall(function()
@@ -1363,6 +2336,7 @@ local function collectEventTarget(target, token)
         end)
     end
 
+
     local deadline = tick() + 1
 
     while tick() < deadline
@@ -1370,11 +2344,22 @@ local function collectEventTarget(target, token)
         and token == events.runToken
         and events.enabled[target.kind]
     do
-        if eventConfirmed(target.model, target.kind) then
+        if eventConfirmed(target.model, target.kind, target) then
             events.counts[target.kind] = events.counts[target.kind] + 1
             events.counts.total = events.counts.total + 1
-            events.retryAt[target.model] = nil
-            events.status = events.current .. " confirmed"
+            if target.retryKey then
+                events.retryAt[target.retryKey] = nil
+            end
+            if target.kind == "masked" and target.id then
+                events.maskedRetryAt[target.id.key] = nil
+            end
+            events.status = events.current
+                .. (target.kind == "masked"
+                        and target.id
+                        and target.id.type == "orb"
+                        and " touched"
+                    or " confirmed")
+            events.maskedScanAt = 0
             return true
         end
 
@@ -1384,19 +2369,36 @@ local function collectEventTarget(target, token)
     if generation == _G.CelestialFarmGeneration
         and token == events.runToken
         and events.enabled[target.kind]
-        and eventConfirmed(target.model, target.kind)
+        and eventConfirmed(target.model, target.kind, target)
     then
         events.counts[target.kind] = events.counts[target.kind] + 1
         events.counts.total = events.counts.total + 1
-        events.retryAt[target.model] = nil
-        events.status = events.current .. " confirmed"
+        if target.retryKey then
+            events.retryAt[target.retryKey] = nil
+        end
+        if target.kind == "masked" and target.id then
+            events.maskedRetryAt[target.id.key] = nil
+        end
+        events.status = events.current
+            .. (target.kind == "masked"
+                    and target.id
+                    and target.id.type == "orb"
+                    and " touched"
+                or " confirmed")
+        events.maskedScanAt = 0
         return true
     end
 
     if target.model.Parent
         and events.enabled[target.kind]
     then
-        events.retryAt[target.model] = tick() + events.retry[target.kind]
+        local retryAt = tick() + events.retry[target.kind]
+        if target.kind == "masked" and target.id then
+            events.maskedRetryAt[target.id.key] = retryAt
+            events.maskedScanAt = 0
+        else
+            events.retryAt[target.retryKey] = retryAt
+        end
         events.status = string.format(
             "%s not confirmed, retrying in %.1fs",
             events.current,
@@ -1408,6 +2410,12 @@ local function collectEventTarget(target, token)
 end
 
 local function runEventStep()
+    local now = tick()
+    if now < events.nextTargetScanAt then
+        return
+    end
+    events.nextTargetScanAt = now + 0.25
+
     if events.busy or not anyEventEnabled() then
         return
     end
@@ -1417,13 +2425,31 @@ local function runEventStep()
     local token = events.runToken
     local ok, failure = pcall(function()
         events.status = "Scanning event targets"
-        local target = findNearestEventTarget()
+        local target, summerStormIsActive = findNearestEventTarget()
 
         if target then
             collectEventTarget(target, token)
+        elseif events.maskedScanPending then
+            events.status = "Scanning Masked Man targets"
         elseif not events.atHome then
             events.status = "No targets, returning"
             returnFromEvents()
+        elseif events.enabled.summer
+            and events.summerOnlyStorm
+            and not events.enabled.battle
+            and not events.enabled.disco
+            and not events.enabled.masked
+        then
+            if summerStormIsActive == nil then
+                summerStormIsActive = summerStormActive()
+            end
+            events.status = summerStormIsActive
+                and "Waiting for event targets"
+                or "Waiting for Coin Storm"
+        elseif events.enabled.masked and not events.maskedActive then
+            events.status = "Waiting for Masked Man event"
+        elseif events.enabled.masked then
+            events.status = "Waiting for Masked Man targets"
         else
             events.status = "Waiting for event targets"
         end
@@ -1434,6 +2460,7 @@ local function runEventStep()
         events.enabled.summer = false
         events.enabled.battle = false
         events.enabled.disco = false
+        events.enabled.masked = false
         world3.eventsActive = false
         events.running = false
         events.status = "Error: " .. cleanError(failure)
@@ -1444,6 +2471,9 @@ end
 local function setEventEnabled(kind, enabled)
     local wasActive = anyEventEnabled()
     events.enabled[kind] = enabled == true
+    if enabled then
+        events.nextTargetScanAt = 0
+    end
 
     if enabled then
         stopWorld3()
@@ -1453,8 +2483,16 @@ local function setEventEnabled(kind, enabled)
             events.runToken = events.runToken + 1
             events.homePosition = nil
             events.atHome = true
+            events.tpHistory = {}
+            events.lastTpAt = nil
+            events.rewardLockSignal = nil
+            events.retryAt = {}
+            events.maskedRetryAt = {}
+            events.maskedScanAt = 0
+            events.maskedPadScanAt = 0
             events.status = "Event search started"
             events.running = true
+            writeTpDiagnostic("event_session_started", { kind = kind })
         end
     elseif not anyEventEnabled() then
         world3.eventsActive = false
@@ -1469,11 +2507,12 @@ local function stopEvents()
     events.enabled.summer = false
     events.enabled.battle = false
     events.enabled.disco = false
+    events.enabled.masked = false
     world3.eventsActive = false
     events.runToken = events.runToken + 1
     events.running = false
     events.status = "Stopped"
-    returnFromEvents()
+    events.returnPending = true
     stopRoot()
 end
 
@@ -1495,7 +2534,7 @@ returnToWorld3Spawn = function()
             "World-3-Spawn TP %d/6",
             attempt
         )
-        world3.point = "Recovery"
+        world3.point = "Return"
 
         if root then
             stopPart(root)
@@ -1529,41 +2568,42 @@ returnToWorld3Spawn = function()
 
     stopRoot()
     world3.status = "World 3 spawn teleport corrected"
-    world3.point = "Recovery"
+    world3.point = "Return"
     return false
 end
 
 local window = Lib:CreateWindow({
     title = "CELESTIAL",
-    subtitle = "",
-    size = Vector2.new(500, 350),
+    subtitle = "WORLD 3",
+    size = Vector2.new(620, 420),
     menuKey = "delete",
     configName = "orbit",
     configFolder = "celestial_farm",
-    accentA = Color3.fromRGB(91, 145, 220),
-    accentB = Color3.fromRGB(91, 145, 220),
+    accentA = Color3.fromRGB(112, 114, 255),
+    accentB = Color3.fromRGB(86, 192, 255),
     theme = {
-        bg = Color3.fromRGB(17, 17, 17),
-        sidebar = Color3.fromRGB(12, 12, 12),
-        text = Color3.fromRGB(238, 238, 238),
-        sub = Color3.fromRGB(170, 170, 174),
-        surface = Color3.fromRGB(17, 17, 17),
-        surface2 = Color3.fromRGB(24, 25, 27),
-        surface3 = Color3.fromRGB(31, 33, 36),
-        border = Color3.fromRGB(61, 65, 76),
-        trackOff = Color3.fromRGB(71, 71, 71),
-        sliderTrack = Color3.fromRGB(71, 71, 71)
+        bg = Color3.fromRGB(10, 12, 18),
+        sidebar = Color3.fromRGB(13, 15, 23),
+        text = Color3.fromRGB(236, 239, 247),
+        sub = Color3.fromRGB(143, 151, 174),
+        surface = Color3.fromRGB(14, 17, 25),
+        surface2 = Color3.fromRGB(18, 22, 32),
+        surface3 = Color3.fromRGB(24, 29, 42),
+        border = Color3.fromRGB(43, 51, 71),
+        trackOff = Color3.fromRGB(46, 53, 70),
+        sliderTrack = Color3.fromRGB(38, 45, 62)
     },
-    font = "Pixel",
+    font = "Default",
     backgroundEffect = "Off",
-    opacity = 1,
-    rounding = 0,
+    opacity = 0.99,
+    rounding = 0.9,
     rowLines = false,
-    checkboxStyle = true,
+    checkboxStyle = false,
     railOnly = false,
-    skeetMode = true,
-    compactSkeet = true,
-    searchStyle = "off",
+    skeetMode = false,
+    compactSkeet = false,
+    neverloseMode = true,
+    searchStyle = "icon",
     lockChrome = true,
     smartFps = true,
     gameInput = true,
@@ -1571,9 +2611,8 @@ local window = Lib:CreateWindow({
     startOpen = true,
     keybindOverlay = false
 })
-
+Lib:SetPerformance(false)
 _G.CelestialFarmUI = window
-Lib:SetLayout("side")
 
 Lib:Category("FARM")
 local world3Tab = window:Tab("World 3", "target")
@@ -1604,7 +2643,12 @@ world3AutoHandle:AddSettings({
         type = "dropdown",
         label = "Route",
         value = "Stage 1",
-        choices = { "Stage 1", "Stage 5", "Stage 6", "Stage 7" },
+        choices = {
+            "Stage 1",
+            "Stage 5",
+            "Stage 6",
+            "Stage 7"
+        },
         legacyOptionKeys = {
             "World 3.World 3 Orbit.Auto Farm.settings.Route",
             "World 3.World 3 Orbit.Auto Farm.settings.Stage 5 Route"
@@ -1612,9 +2656,13 @@ world3AutoHandle:AddSettings({
         legacyKey = "World 3.World 3 Orbit.Route",
         deserialize = function(value)
             if type(value) == "table" then
-                return value[1]
+                value = value[1]
             elseif type(value) == "boolean" then
-                return value and "Stage 5" or "Stage 1"
+                value = value and "Stage 5" or "Stage 1"
+            end
+
+            if value == "Stage 1 Hold" then
+                return "Stage 1"
             end
 
             return value
@@ -1631,6 +2679,11 @@ world3AutoHandle:AddSettings({
         max = 1000,
         step = 10,
         suffix = " studs/s",
+        visibleWhen = function()
+            return world3.route == "Stage 5"
+                or world3.route == "Stage 6"
+                or world3.route == "Stage 7"
+        end,
         legacyOptionKeys = {
             "World 3.World 3 Orbit.Auto Farm.settings.Geschwindigkeit"
         },
@@ -1639,14 +2692,6 @@ world3AutoHandle:AddSettings({
             world3.speed = value
         end
     },
-    {
-        type = "toggle",
-        label = "Void recovery",
-        value = true,
-        callback = function(enabled)
-            world3.autoVoidRecovery = enabled == true
-        end
-    }
 })
 
 world3Control:Button("Run", function()
@@ -1671,9 +2716,6 @@ end)
 world3Live:Label(function()
     return "Last Wins: " .. formatNumber(world3.lastReward)
 end)
-world3Live:Label(function()
-    return "Void recoveries: " .. tostring(world3.voidRecoveries)
-end)
 
 local eventsTab = window:Tab("Events", "star")
 local eventsControl = eventsTab:Section(
@@ -1694,6 +2736,20 @@ eventHandles.summer = eventsControl:Toggle(
     end
 )
 eventHandles.summer:AddSettings({
+    {
+        type = "toggle",
+        label = "Only during Coin Storm",
+        value = false,
+        callback = function(value)
+            events.summerOnlyStorm = value == true
+            if events.summerOnlyStorm then
+                local active = summerStormActive()
+                events.status = active
+                    and "Coin Storm active"
+                    or "Waiting for Coin Storm"
+            end
+        end
+    },
     {
         type = "slider",
         label = "Retry after",
@@ -1752,6 +2808,28 @@ eventHandles.disco:AddSettings({
     }
 })
 
+eventHandles.masked = eventsControl:Toggle(
+    "Masked Man Color Mania",
+    false,
+    function(enabled)
+        setEventEnabled("masked", enabled)
+    end
+)
+eventHandles.masked:AddSettings({
+    {
+        type = "slider",
+        label = "Retry after",
+        value = 2,
+        min = 0.5,
+        max = 10,
+        step = 0.5,
+        suffix = "s",
+        callback = function(value)
+            events.retry.masked = value
+        end
+    }
+})
+
 eventsControl:Button("Stop All", function()
     stopEvents()
 end)
@@ -1770,6 +2848,10 @@ eventsLive:Label(function()
 end)
 eventsLive:Label(function()
     return "Disco Keycaps: " .. tostring(events.counts.disco)
+end)
+eventsLive:Label(function()
+    return "Masked touches/rewards: "
+        .. tostring(events.counts.masked)
 end)
 eventsLive:Label(function()
     return "Total: " .. tostring(events.counts.total)
@@ -1849,6 +2931,7 @@ hudSettings:Label(
 )
 
 window:autoloadConfig("orbit")
+Lib:SetPerformance(false)
 
 task.spawn(function()
     while generation == _G.CelestialFarmGeneration do
@@ -1871,7 +2954,7 @@ task.spawn(function()
             runEventStep()
         elseif events.returnPending then
             events.returnPending = false
-            returnFromEvents()
+            returnFromEvents(events.runToken, true)
         end
 
         task.wait(0.1)
