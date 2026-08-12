@@ -64,7 +64,9 @@ local listfiles = hostFn("listfiles", function() return {} end)
 local delfile   = hostFn("delfile")
 
 local HttpService
-pcall(function() HttpService = game:GetService("HttpService") end)
+pcall(function()
+    HttpService = game:GetService("HttpService")
+end)
 local function jsonSafe(v, seen)
     local t = type(v)
     if t == "number" then if v ~= v or v == math.huge or v == -math.huge then return 0 end return v
@@ -161,32 +163,32 @@ end
 
 local WHITE = c3(255, 255, 255)
 local Theme = {
-    bg        = c3(7, 7, 8),
-    sidebar   = c3(10, 10, 11),
+    bg        = c3(11, 13, 18),
+    sidebar   = c3(8, 10, 14),
     white     = WHITE,
-    text      = c3(218, 218, 220),
-    sub       = c3(150, 150, 154),
-    accent    = c3(83, 132, 232),
-    accentA   = c3(83, 132, 232),
-    accentB   = c3(83, 132, 232),
+    text      = c3(224, 226, 232),
+    sub       = c3(143, 148, 160),
+    accent    = c3(86, 126, 246),
+    accentA   = c3(86, 126, 246),
+    accentB   = c3(103, 139, 255),
 
     tlRed     = c3(250, 93, 86),
     tlYellow  = c3(252, 190, 57),
     tlGreen   = c3(119, 174, 94),
 
-    trackOff  = c3(24, 24, 26),
-    trackOn   = c3(83, 132, 232),
-    knobOff   = c3(120, 120, 124),
-    sliderTrack = c3(45, 45, 48),
+    trackOff  = c3(28, 32, 40),
+    trackOn   = c3(86, 126, 246),
+    knobOff   = c3(126, 132, 143),
+    sliderTrack = c3(39, 44, 55),
 
     good      = c3(119, 174, 94),
     bad       = c3(250, 93, 86),
     unsafe    = c3(252, 190, 57),
 
-    surface   = c3(12, 12, 13),
-    surface2  = c3(17, 17, 19),
-    surface3  = c3(23, 23, 25),
-    border    = c3(53, 53, 57),
+    surface   = c3(14, 17, 23),
+    surface2  = c3(17, 20, 27),
+    surface3  = c3(23, 27, 35),
+    border    = c3(37, 42, 53),
 }
 
 local ThemePresets = {
@@ -221,7 +223,7 @@ local ThemePresets = {
 
 local AL = {
     hairline = 0.32, card = 1.00, cardStrk = 1.00, tabFill = 0.12,
-    text = 0.95, label = 0.88, dim = 0.62, hover = 1.00, field = 0.08,
+    text = 0.95, label = 0.90, dim = 0.76, hover = 1.00, field = 0.08,
 }
 AL.winShadow = { 0.10, 0.07, 0.05, 0.03, 0.015 }
 
@@ -298,6 +300,27 @@ addInput("semicolon", 0xBA, ";", ":"); addInput("plus", 0xBB, "=", "+"); addInpu
 addInput("minus", 0xBD, "-", "_"); addInput("period", 0xBE, ".", ">"); addInput("slash", 0xBF, "/", "?")
 addInput("tilde", 0xC0, "`", "~"); addInput("lbracket", 0xDB, "[", "{"); addInput("backslash", 0xDC, "\\", "|")
 addInput("rbracket", 0xDD, "]", "}"); addInput("quote", 0xDE, "'", "\"")
+pcall(function()
+    ProjectState.userInputService = game:GetService("UserInputService")
+    local inputBegan = ProjectState.userInputService
+        and ProjectState.userInputService.InputBegan
+    local connect = inputBegan and inputBegan.Connect
+    if type(connect) == "function" then
+        ProjectState.menuInputConnection = connect(
+            inputBegan,
+            function(input)
+                local keyCode = input and input.KeyCode
+                local configured = Input[menuKey]
+                if ProjectState.alive
+                    and configured
+                    and keyCode == configured.id
+                then
+                    ProjectState.menuTogglePending = true
+                end
+            end
+        )
+    end
+end)
 
 local Pool          = { sq = {}, tx = {}, ln = {}, ci = {}, tr = {}, im = {} }
 local PoolC         = { sq = {}, tx = {}, ln = {}, ci = {}, tr = {}, im = {} }
@@ -1039,10 +1062,15 @@ local Mouse, LocalPlayer, Players
 pcall(function() Players = game:GetService("Players") end)
 local function viewportSize()
     if ProjectState._vpW then return ProjectState._vpW, ProjectState._vpH end
-    local x, y = 1920, 1080
+    local x = ProjectState.lastViewportW or 1920
+    local y = ProjectState.lastViewportH or 1080
     pcall(function()
         local cam = workspace.CurrentCamera
-        if cam then x = cam.ViewportSize.X; y = cam.ViewportSize.Y end
+        local size = cam and cam.ViewportSize
+        if size and size.X >= 320 and size.Y >= 240 then
+            x, y = size.X, size.Y
+            ProjectState.lastViewportW, ProjectState.lastViewportH = x, y
+        end
     end)
     ProjectState._vpW, ProjectState._vpH = x, y
     return x, y
@@ -1084,8 +1112,9 @@ local function applyInputState(force)
 end
 local function clampWindow()
     local vw, vh = viewportSize()
-    ProjectState.x = clamp(ProjectState.x, 0, max(0, vw - min(80, ProjectState.w)))
-    ProjectState.y = clamp(ProjectState.y, 0, max(0, vh - min(40, ProjectState.h)))
+    if vw < 320 or vh < 240 then return end
+    ProjectState.x = clamp(ProjectState.x, 8, max(8, vw - min(80, ProjectState.w)))
+    ProjectState.y = clamp(ProjectState.y, 8, max(8, vh - min(40, ProjectState.h)))
 end
 local function setOpen(open)
     open = boolv(open)
@@ -1093,7 +1122,7 @@ local function setOpen(open)
     ProjectState.open = open
     ProjectState.drag = nil; ProjectState.resizeEdge = nil; ProjectState.sliderDrag = nil
     ProjectState.scrollDrag = nil; ProjectState.dropdown = nil; ProjectState.colorpicker = nil; ProjectState.featureSettings = nil
-    ProjectState.cpDrag = nil; ProjectState.focus = nil; ProjectState.keyMenu = nil
+    ProjectState.cpDrag = nil; ProjectState.focus = nil; ProjectState.controlFocus = nil; ProjectState.keyMenu = nil
     applyInputState(false)
 end
 
@@ -1236,6 +1265,11 @@ local function makeItem(section, item)
     function handle:Tooltip(text) item.tooltip = tostring(text or ""); return self end
     function handle:SetText(t) item.label = tostring(t); if item.buttons and item.buttons[1] then item.buttons[1].label = item.label end; return self end
     function handle:SetColor(c) item.color = c; return self end
+    function handle:SetStyle(style)
+        item.style = style
+        if item.buttons and item.buttons[1] then item.buttons[1].style = style end
+        return self
+    end
     function handle:SetRisk(b) item.risk = b ~= false; return self end
     function handle:Reset()
         if item.type == "rangeslider" then
@@ -1322,8 +1356,12 @@ local function makeItem(section, item)
     end
 
     if item.type == "button" then
-        function handle:AddButton(label, callback)
-            item.buttons[#item.buttons + 1] = { label = tostring(label or "Button"), callback = callback }
+        function handle:AddButton(label, callback, style)
+            item.buttons[#item.buttons + 1] = {
+                label = tostring(label or "Button"),
+                callback = callback,
+                style = style
+            }
             return self
         end
     end
@@ -1348,9 +1386,9 @@ local function createSection(tab, name, side, desc)
     function api:Divider(label)
         return makeItem(section, { type = "divider", label = label and tostring(label) or nil })
     end
-    function api:Button(label, callback, tooltip)
+    function api:Button(label, callback, tooltip, style)
         return makeItem(section, { type = "button", label = tostring(label or "Button"), callback = callback, tooltip = tooltip,
-            buttons = { { label = tostring(label or "Button"), callback = callback } } })
+            style = style, buttons = { { label = tostring(label or "Button"), callback = callback, style = style } } })
     end
     function api:Toggle(label, default, callback, tooltip)
         return makeItem(section, { type = "checkbox", label = tostring(label or "Toggle"), value = default == true, callback = callback, tooltip = tooltip })
@@ -1481,6 +1519,21 @@ function ui:IsOpen() return ProjectState.open == true end
 function ui:SetOpen(b) setOpen(b == true); return self end
 function ui:_dbgFocus(h) local it = (type(h) == "table" and h.item) or h; if it then ProjectState.focus = it; it.caret = 0; it.selA = nil end return self end
 function ui:_dbgOpenDropdown(h) local it = (type(h) == "table" and h.item) or h; if it then dDropdown(120, 120, 180, it) end return self end
+function ui:_dbgControlFocus(h)
+    ProjectState.controlFocus = (type(h) == "table" and h.item) or h
+    ProjectState.controlFocusPart = 1
+    return self
+end
+function ui:_dbgControlKey(name)
+    if Input[name] then ProjectState.debugControlKey = name end
+    return self
+end
+function ui:_dbgClampViewport(w, h)
+    ProjectState._vpW, ProjectState._vpH = tonumber(w), tonumber(h)
+    clampWindow()
+    ProjectState._vpW, ProjectState._vpH = nil, nil
+    return ProjectState.w, ProjectState.h, ProjectState.x, ProjectState.y
+end
 function ui:_dbgOpenFeatureSettings(h)
     local item = (type(h) == "table" and h.item) or h
     if item and item.settings then
@@ -1641,6 +1694,7 @@ local function updateInput()
         keys.ctrl = true; keys.lctrl = true; keys.rctrl = true; keys.space = true; keys.esc = true
         if ProjectState.open then
             keys.left = true; keys.right = true; keys.up = true; keys.down = true; keys.pageup = true; keys.pagedown = true
+            keys.tab = true; keys.enter = true; keys.shift = true; keys.lshift = true; keys.rshift = true
         end
         for _, item in ipairs(keybindItems) do
             local kb = item.keybind
@@ -2958,28 +3012,28 @@ end
 local function getItemHeight(item)
     local t = item.type
     if ProjectState.skeetMode or ProjectState.neverloseMode then
-        if t == "slider" or t == "rangeslider" then return 40
-        elseif t == "dropdown" or t == "textbox" then return 48
-        elseif t == "checkbox" then return 22
-        elseif t == "button" then return ProjectState.skeetMode and max(28, #(item.buttons or {}) * 28) or 28
+        if t == "slider" or t == "rangeslider" then return 42
+        elseif t == "dropdown" or t == "textbox" then return 50
+        elseif t == "checkbox" then return 30
+        elseif t == "button" then return ProjectState.skeetMode and max(30, #(item.buttons or {}) * 30) or 30
         elseif t == "label" then return max(18, (item.cachedLineCount or 1) * 15 + 2)
         elseif t == "info" then return max(18, (item.cachedLineCount or 1) * 14 + 2)
         elseif t == "divider" then return 20
         end
     end
-    if t == "slider" or t == "rangeslider" then return 46
-    elseif t == "dropdown" then return ProjectState.dropdownInline and 26 or 44
-    elseif t == "textbox" then return 44
-    elseif t == "checkbox" then return 36
-    elseif t == "colorpicker" then return 26
+    if t == "slider" or t == "rangeslider" then return 48
+    elseif t == "dropdown" then return ProjectState.dropdownInline and 30 or 48
+    elseif t == "textbox" then return 48
+    elseif t == "checkbox" then return 38
+    elseif t == "colorpicker" then return 30
     elseif t == "label" then return max(22, (item.cachedLineCount or 1) * 18 + 4)
     elseif t == "info" then return max(20, (item.cachedLineCount or 1) * 17 + 4)
-    elseif t == "button" then return 34
-    elseif t == "keybind" then return 30
+    elseif t == "button" then return 38
+    elseif t == "keybind" then return 32
     elseif t == "image" then return (item.imgHeight or 80) + 6
     elseif t == "divider" then return 24
     end
-    return 28
+    return 30
 end
 
 local function tooltipReq(text, x, y)
@@ -2992,6 +3046,9 @@ end
 local function drawWidget(item, rowX, rowY, rowW, trans, click, rightClick, popupBlocking)
     local t = item.type
     local interact = (trans > 0.5) and (not popupBlocking)
+    if ProjectState.controlFocus == item then
+        strokeRect(rowX - 4, rowY - 3, rowW + 8, getItemHeight(item) + 6, ProjectState._accentMid, 34, 6, 0.9 * trans)
+    end
 
     if t == "label" then
         if item.labelFn then
@@ -3044,23 +3101,29 @@ local function drawWidget(item, rowX, rowY, rowW, trans, click, rightClick, popu
         end
 
     elseif t == "button" then
-        local bh = 22
-        local btns = item.buttons or { { label = item.label, callback = item.callback } }
+        local bh = 26
+        local btns = item.buttons or { { label = item.label, callback = item.callback, style = item.style } }
         local nB = #btns
         local gap = ProjectState.skeetMode and 6 or (ProjectState.neverloseMode and 6 or 10)
         local bw = ProjectState.skeetMode and rowW or ((rowW - gap * (nB - 1)) / nB)
         for bi, b in ipairs(btns) do
             local bx = ProjectState.skeetMode and rowX or (rowX + (bi - 1) * (bw + gap))
-            local by = ProjectState.skeetMode and (rowY + (bi - 1) * 28) or rowY
+            local by = ProjectState.skeetMode and (rowY + (bi - 1) * 30) or rowY
             local hov = interact and over(bx, by, bw, bh)
             b._hf = approach(b._hf or 0, hov and 1 or 0, 16)
             local hf = b._hf
             local buttonRadius = ProjectState.neverloseMode and 5 or 0
-            rect(bx, by, bw, bh, lerpColor(Theme.surface2, Theme.surface3, hf), 30, buttonRadius, trans)
+            local style = b.style or item.style
+            local semantic = style == "danger" and Theme.bad or ProjectState._accentMid
+            local fill = lerpColor(Theme.surface2, Theme.surface3, hf)
+            local fillAlpha = trans
+            if style == "primary" then fill = semantic; fillAlpha = (0.24 + 0.10 * hf) * trans
+            elseif style == "danger" then fill = semantic; fillAlpha = (0.08 + 0.14 * hf) * trans end
+            rect(bx, by, bw, bh, fill, 30, buttonRadius, fillAlpha)
             rect(bx + 1, by + 1, bw - 2, floor(bh / 2), WHITE, 31, buttonRadius, 0.025 * trans)
-            strokeRect(bx, by, bw, bh, lerpColor(Theme.border, ProjectState._accentMid, hf), 32, buttonRadius, trans)
+            strokeRect(bx, by, bw, bh, style and semantic or lerpColor(Theme.border, semantic, hf), 32, buttonRadius, (style and (0.62 + 0.30 * hf) or 1) * trans)
             local la = (AL.label + (AL.hover - AL.label) * hf) * trans
-            txtC(b.label, bx + bw / 2, by + bh / 2, item.color or WHITE, 13, FontSystem, 33, la)
+            txtC(b.label, bx + bw / 2, by + bh / 2, item.color or WHITE, 13, style == "primary" and FontBold or FontSystem, 33, la)
             if item.tooltip and bi == 1 and hov then tooltipReq(item.tooltip, ProjectState.mouseX, ProjectState.mouseY) end
             if click and hov then invoke(b.callback); click = false end
         end
@@ -3135,16 +3198,16 @@ local function drawWidget(item, rowX, rowY, rowW, trans, click, rightClick, popu
             end
         end
         if item.settings then
-            local optionW = ProjectState.neverloseMode and 22 or 18
-            local optionY = rowY + (ProjectState.neverloseMode and 1 or 3)
+            local optionW = ProjectState.neverloseMode and 24 or 22
+            local optionY = rowY + 1
             rightX = rightX - optionW
-            local gearHov = interact and over(rightX, optionY, optionW, 20)
+            local gearHov = interact and over(rightX, optionY, optionW, 24)
             if ProjectState.neverloseMode then
-                rect(rightX, optionY, optionW, 20, ProjectState._accentMid, 31, 6, (gearHov and 0.16 or 0.07) * trans)
-                strokeRect(rightX, optionY, optionW, 20, ProjectState._accentMid, 32, 6, (gearHov and 0.72 or 0.28) * trans)
-                drawIcon("cog", rightX + 4, optionY + 3, 14, gearHov and WHITE or Theme.sub, 33, trans)
+                rect(rightX, optionY, optionW, 24, ProjectState._accentMid, 31, 6, (gearHov and 0.16 or 0.07) * trans)
+                strokeRect(rightX, optionY, optionW, 24, ProjectState._accentMid, 32, 6, (gearHov and 0.72 or 0.28) * trans)
+                drawIcon("cog", rightX + 5, optionY + 5, 14, gearHov and WHITE or Theme.sub, 33, trans)
             else
-                drawIcon("cog", rightX + 2, optionY + 2, 14, gearHov and ProjectState._accentMid or Theme.sub, 33, trans)
+                drawIcon("cog", rightX + 4, optionY + 5, 14, gearHov and ProjectState._accentMid or Theme.sub, 33, trans)
             end
             onSettings = gearHov
             rightX = rightX - 6
@@ -3161,10 +3224,10 @@ local function drawWidget(item, rowX, rowY, rowW, trans, click, rightClick, popu
                 click = false
             end
         end
-        local checkH = (ProjectState.skeetMode or ProjectState.neverloseMode) and 22 or 32
+        local checkH = (ProjectState.skeetMode or ProjectState.neverloseMode) and 26 or 34
         txt(item.label, checkLabelX, textTop(rowY, checkH, 13), WHITE, 13, FontSystem, 31, false, false, rightX - checkLabelX - 4, AL.label * trans)
-        if item.tooltip and interact and over(rowX, rowY, rowW, 32) then tooltipReq(item.tooltip, ProjectState.mouseX, ProjectState.mouseY) end
-        if click and interact and over(rowX, rowY, rowW, 32) and not onColor and not onKey and not onSettings then
+        if item.tooltip and interact and over(rowX, rowY, rowW, checkH + 4) then tooltipReq(item.tooltip, ProjectState.mouseX, ProjectState.mouseY) end
+        if click and interact and over(rowX, rowY, rowW, checkH + 4) and not onColor and not onKey and not onSettings then
             setItemValue(item, not item.value, true); click = false
         end
 
@@ -3267,13 +3330,13 @@ local function drawWidget(item, rowX, rowY, rowW, trans, click, rightClick, popu
         rect(rowX, syBar, sw, barH, Theme.sliderTrack, 30, barR, trans)
         if f > 0.001 then rect(rowX, syBar, max(barH, sw * f), barH, lerpColor(Theme.accentA, Theme.accentB, f), 31, barR, trans) end
         local knobX = rowX + sw * f
-        local hovKnob = interact and over(knobX - 9, syBar - 5, 18, 18)
+        local hovKnob = interact and over(knobX - 10, syBar - 10, 20, 24)
         item.animatedRadius = approach(item.animatedRadius or 4, (hovKnob or ProjectState.sliderDrag == item) and 6 or 4, 16)
         if not ProjectState.skeetMode then circ(knobX, syBar + barH / 2, item.animatedRadius, WHITE, 32, true, 1, 24, trans) end
-        if click and interact and over(rowX - 4, syBar - 8, sw + 8, 16) and not over(vbX, rowY, vbW, 18) then
+        if click and interact and over(rowX - 4, syBar - 10, sw + 8, 24) and not over(vbX, rowY, vbW, 18) then
             ProjectState.sliderDrag = item; click = false
         end
-        if rightClick and interact and over(rowX - 4, syBar - 8, sw + 8, 16) and item.default ~= nil then
+        if rightClick and interact and over(rowX - 4, syBar - 10, sw + 8, 24) and item.default ~= nil then
             setItemValue(item, item.default, true); rightClick = false
         end
         if Input.m1.held and ProjectState.sliderDrag == item then
@@ -3343,16 +3406,17 @@ local function drawWidget(item, rowX, rowY, rowW, trans, click, rightClick, popu
             item._ddDisp = item.multi and (#item.value > 0 and concat(item.value, ", ") or "none") or (item.value[1] or "none")
         end
         local disp = item._ddDisp
-        local hov = interact and over(boxX, boxY, boxW, 24)
+        item._keyboardBox = { x = boxX, y = boxY, w = boxW, h = 26 }
+        local hov = interact and over(boxX, boxY, boxW, 26)
         local ddR = ProjectState.skeetMode and 0 or 5
-        rect(boxX, boxY, boxW, 24, Theme.surface2, 30, ddR, trans)
-        strokeRect(boxX, boxY, boxW, 24, Theme.border, 31, ddR, (0.6 + (hov and 0.4 or 0)) * trans)
-        txt(disp, boxX + 10, textTop(boxY, 24, 13), WHITE, 13, FontSystem, 32, false, false, boxW - 18, AL.dim * trans)
+        rect(boxX, boxY, boxW, 26, Theme.surface2, 30, ddR, trans)
+        strokeRect(boxX, boxY, boxW, 26, Theme.border, 31, ddR, (0.6 + (hov and 0.4 or 0)) * trans)
+        txt(disp, boxX + 10, textTop(boxY, 26, 13), WHITE, 13, FontSystem, 32, false, false, boxW - 18, AL.dim * trans)
         local open = ProjectState.dropdown and ProjectState.dropdown.item == item and not ProjectState.dropdown.closing
-        if item._ddImg then ProjectState.placeImg(item._ddImg, item._ddIc, boxX + boxW - 20, boxY + 5, 14, 14, 32, 0, false) end
+        if item._ddImg then ProjectState.placeImg(item._ddImg, item._ddIc, boxX + boxW - 21, boxY + 6, 14, 14, 32, 0, false) end
         if item.tooltip and hov then tooltipReq(item.tooltip, ProjectState.mouseX, ProjectState.mouseY) end
         if click and hov then
-            if open then ProjectState.dropdown.closing = true else dDropdown(boxX, boxY + 26, boxW, item, boxX, boxY, boxW, 24) end
+            if open then ProjectState.dropdown.closing = true else dDropdown(boxX, boxY + 28, boxW, item, boxX, boxY, boxW, 26) end
             click = false
         end
 
@@ -3360,18 +3424,18 @@ local function drawWidget(item, rowX, rowY, rowW, trans, click, rightClick, popu
         txt(item.label, rowX, textTop(rowY, 16, 13), WHITE, 13, FontSystem, 31, false, false, rowW, AL.label * trans)
         local boxY = rowY + 20
         local focused = ProjectState.focus == item
-        local hov = interact and over(rowX, boxY, rowW, 24)
-        rect(rowX, boxY, rowW, 24, WHITE, 30, 4, AL.field * trans)
-        strokeRect(rowX, boxY, rowW, 24, WHITE, 31, 4, (focused and 0.45 or (hov and 0.2 or AL.hairline)) * trans)
+        local hov = interact and over(rowX, boxY, rowW, 26)
+        rect(rowX, boxY, rowW, 26, WHITE, 30, 4, AL.field * trans)
+        strokeRect(rowX, boxY, rowW, 26, WHITE, 31, 4, (focused and 0.45 or (hov and 0.2 or AL.hairline)) * trans)
         local tx = rowX + 10
         local val = item.value or ""
         local empty = val == "" and not focused
         if empty then
-            txt(item.label, tx, textTop(boxY, 24, 13), WHITE, 13, FontSystem, 32, false, false, rowW - 20, 0.3 * trans)
+            txt(item.label, tx, textTop(boxY, 26, 13), WHITE, 13, FontSystem, 32, false, false, rowW - 20, 0.45 * trans)
         elseif focused then
-            drawEditable(item, val, tx, textTop(boxY, 24, 13), 13, WHITE, AL.text * trans, 32, rowW - 18, focused, item.caret, item.selA)
+            drawEditable(item, val, tx, textTop(boxY, 26, 13), 13, WHITE, AL.text * trans, 32, rowW - 18, focused, item.caret, item.selA)
         else
-            txt(val, tx, textTop(boxY, 24, 13), WHITE, 13, FontSystem, 32, false, false, rowW - 18, AL.text * trans)
+            txt(val, tx, textTop(boxY, 26, 13), WHITE, 13, FontSystem, 32, false, false, rowW - 18, AL.text * trans)
         end
         if click and hov then
             ProjectState.focus = item
@@ -3406,14 +3470,15 @@ local function drawSectionCard(section, colX, sy, colW, secH, clipTop, clipBotto
             local cc = Theme.text
             if section._nameU ~= section.name then
                 section._nameU = section.name
-                section._nameUpper = (ProjectState.skeetMode or ProjectState.neverloseMode) and section.name or string.upper(section.name)
+                section._nameUpper = (ProjectState.skeetMode or ProjectState.neverloseMode)
+                    and string.upper(section.name)
+                    or section.name
             end
             local la = (section.collapsed and 0.55 or 0.85) * ha
             local lw = min(textWidth(section._nameUpper, 11, FontBold), colW - 40)
             if ProjectState.neverloseMode then
-                circ(colX + 14, sy + 12, 2, ProjectState._accentMid, 35, true, 1, 12, la)
-                txt(section._nameUpper, colX + 22, sy + 7, cc, 11, FontBold, 35, false, false, colW - 34, la)
-                lineD(colX + 12, sy + headerH + 3, colX + colW - 12, sy + headerH + 3, Theme.border, 34, 1, 0.42 * ha)
+                txt(section._nameUpper, colX + 12, sy + 7, Theme.sub, 10, FontBold, 35, false, false, colW - 24, 0.76 * la)
+                lineD(colX + 12, sy + headerH + 3, colX + colW - 12, sy + headerH + 3, Theme.border, 34, 1, 0.34 * ha)
             else
                 rect(colX + 8, sy + 1, lw + 10, 13, Theme.bg, 34, 0, ha)
                 txt(section._nameUpper, colX + 13, sy + 2, cc, 11, FontBold, 35, false, false, colW - 30, la)
@@ -3441,9 +3506,9 @@ local function drawSectionCard(section, colX, sy, colW, secH, clipTop, clipBotto
 
     local cardHov = (not popupBlocking) and over(colX, drawY, colW, drawH)
     section._hovA = approach(section._hovA or 0, (cardHov and fx) and 1 or 0, 6)
-    local cardRadius = ProjectState.neverloseMode and 7 or 0
+    local cardRadius = ProjectState.neverloseMode and 4 or 0
     rect(colX, drawY, colW, drawH, Theme.surface, 28, cardRadius, AL.card * cf)
-    strokeRect(colX, drawY, colW, drawH, Theme.border, 33, cardRadius, AL.cardStrk * cf)
+    strokeRect(colX, drawY, colW, drawH, Theme.border, 33, cardRadius, AL.cardStrk * (ProjectState.neverloseMode and 0.72 or 1) * cf)
     local rowW = colW - 24
     local rowX = colX + 12
     local rowY = sy + headerH + 10
@@ -3489,13 +3554,17 @@ end
 
 local function drawSections(tab, click, held, rightClick, px, contY, pw, contH)
     local popupBlocking = ProjectState.dropdown ~= nil or ProjectState.colorpicker ~= nil or ProjectState.featureSettings ~= nil or ProjectState.keyMenu ~= nil or ProjectState.dialog ~= nil
-    local colW = floor((pw - 8) / 2)
+    local singleColumn = pw < (ProjectState.neverloseMode and 400 or 520)
+    local colW = singleColumn and pw or floor((pw - 8) / 2)
     local scrollTarget = ProjectState._spotScrollTo; ProjectState._spotScrollTo = nil
 
     local leftEnd, rightEnd = 0, 0
     for _, s in ipairs(tab.sections) do
         s._h = ProjectState.skeetMode and not ProjectState.compactSkeet and contH or sectionHeight(s)
-        if s.side == "Full" then
+        if singleColumn then
+            leftEnd = leftEnd + s._h + 8
+            rightEnd = leftEnd
+        elseif s.side == "Full" then
             local top = max(leftEnd, rightEnd)
             leftEnd = top + s._h + 8; rightEnd = leftEnd
         elseif s.side == "Right" then
@@ -3526,7 +3595,10 @@ local function drawSections(tab, click, held, rightClick, px, contY, pw, contH)
     for si, s in ipairs(tab.sections) do
         s._si = si
         local tx, ty, tw
-        if s.side == "Full" then
+        if singleColumn then
+            tx = px; ty = leftY; tw = pw
+            leftY = leftY + s._h + 8; rightY = leftY
+        elseif s.side == "Full" then
             ty = max(leftY, rightY); tx = px; tw = pw
             leftY = ty + s._h + 8; rightY = leftY
         elseif s.side == "Right" then
@@ -3794,7 +3866,7 @@ end
 
 function ProjectState.drawNeverloseWindow(click, held, rightClick)
     local v = ProjectState.drawVisible
-    local headerH, footerH = 48, 27
+    local headerH, sidebarW = 52, 136
     local noPopup = not ProjectState.dropdown
         and not ProjectState.colorpicker
         and not ProjectState.featureSettings
@@ -3835,69 +3907,62 @@ function ProjectState.drawNeverloseWindow(click, held, rightClick)
     local y = ProjectState.y + (1 - v) * 10
     local w, h = ProjectState.w, ProjectState.h
     local accent = ProjectState._accentMid
-    local shellRadius = 9
+    local shellRadius = 8
 
-    rect(x - 8, y + 8, w + 16, h + 12, c3(0, 0, 0), 7, shellRadius + 5, 0.22 * v)
-    rect(x - 4, y + 4, w + 8, h + 7, c3(2, 4, 10), 8, shellRadius + 3, 0.48 * v)
+    rect(x - 7, y + 7, w + 14, h + 11, c3(0, 0, 0), 7, shellRadius + 5, 0.22 * v)
+    rect(x - 3, y + 3, w + 6, h + 6, c3(2, 4, 10), 8, shellRadius + 3, 0.42 * v)
     rect(x, y, w, h, Theme.bg, 9, shellRadius, (ProjectState.menuOpacity or 0.98) * v)
-    strokeRect(x, y, w, h, Theme.border, 10, shellRadius, 0.78 * v)
-    rect(x + 1, y + headerH + 1, w - 2, h - headerH - footerH - 1, Theme.surface2, 9, 0, 0.28 * v)
+    strokeRect(x, y, w, h, Theme.border, 10, shellRadius, 0.72 * v)
 
-    rect(x + 1, y + 1, w - 2, headerH, Theme.sidebar, 10, shellRadius - 1, 0.98 * v)
-    rect(x + 1, y + headerH - 8, w - 2, 8, Theme.sidebar, 10, 0, 0.98 * v)
-    lineD(x + 1, y + headerH, x + w - 1, y + headerH, Theme.border, 11, 1, 0.72 * v)
-    gradRectH(x + 137, y + headerH - 1, w - 152, 1, Theme.accentA, Theme.accentB, 12, 0.5 * v)
-    lineD(x + 137, y + 8, x + 137, y + headerH - 8, Theme.border, 11, 1, 0.55 * v)
+    rect(x + 1, y + 1, sidebarW, h - 2, Theme.sidebar, 10, shellRadius - 1, 0.98 * v)
+    rect(x + sidebarW - 7, y + 1, 8, h - 2, Theme.sidebar, 10, 0, 0.98 * v)
+    lineD(x + sidebarW, y + 1, x + sidebarW, y + h - 1, Theme.border, 11, 1, 0.58 * v)
+    rect(x + sidebarW + 1, y + headerH, w - sidebarW - 2, h - headerH - 1, Theme.surface2, 9, 0, 0.26 * v)
+    lineD(x + sidebarW + 1, y + headerH, x + w - 1, y + headerH, Theme.border, 11, 1, 0.52 * v)
 
-    local brandX, brandY = x + 13, y + 10
-    rect(brandX, brandY, 28, 28, accent, 12, 7, 0.96 * v)
-    strokeRect(brandX, brandY, 28, 28, WHITE, 13, 7, 0.13 * v)
-    txtC("C", brandX + 14, brandY + 14, c3(8, 11, 20), 14, FontBold, 13, v)
-    txt("Celestial", brandX + 36, y + 9, WHITE, 14, FontBold, 13, false, false, 83, AL.text * v)
-    txt("WORLD 3", brandX + 36, y + 27, Theme.sub, 9, FontSystem, 13, false, false, 83, 0.62 * v)
+    local brandX, brandY = x + 13, y + 13
+    rect(brandX, brandY, 26, 26, accent, 12, 7, 0.94 * v)
+    strokeRect(brandX, brandY, 26, 26, WHITE, 13, 7, 0.12 * v)
+    txtC("C", brandX + 13, brandY + 13, c3(8, 11, 20), 13, FontBold, 13, v)
+    txt("Celestial", brandX + 34, y + 11, WHITE, 13, FontBold, 13, false, false, 82, AL.text * v)
+    txt("WORLD 3", brandX + 34, y + 27, Theme.sub, 9, FontSystem, 13, false, false, 82, 0.62 * v)
 
-    local tabX = x + 148
-    local tabY = y + 7
-    local tabH = 34
+    local category = nil
+    local navY = y + 67
     for i, tab in ipairs(ProjectState.tabs) do
         if not tab.hidden then
-            local iconW = tab.icon and 18 or 0
-            local tabW = max(78, iconW + textWidth(tab.name, 12, FontSystem) + 27)
+            if tab.category ~= category then
+                category = tab.category
+                txt(string.upper(category or "MENU"), x + 15, navY, Theme.sub, 9, FontBold, 13, false, false, sidebarW - 30, 0.52 * v)
+                navY = navY + 20
+            end
+
+            local navX, navW, navH = x + 8, sidebarW - 16, 34
             local active = ProjectState.activeTab == tab
-            local hov = noPopup and over(tabX, tabY, tabW, tabH)
+            local hov = noPopup and over(navX, navY, navW, navH)
             local af = approach(tab._af or 0, active and 1 or 0, 16)
             local hf = approach(tab._hf or 0, hov and 1 or 0, 18)
             tab._af, tab._hf = af, hf
 
-            rect(tabX, tabY, tabW, tabH, accent, 12, 6, (0.12 * af + 0.055 * hf * (1 - af)) * v)
-            rect(tabX + 13, y + headerH - 2, max(1, (tabW - 26) * af), 2, accent, 14, 1, af * v)
-
-            local labelX = tabX + 13
+            rect(navX, navY, navW, navH, Theme.surface3, 12, 4, (0.78 * af + 0.36 * hf * (1 - af)) * v)
+            rect(navX, navY + 6, 2, navH - 12, accent, 14, 1, af * v)
             if tab.icon then
-                drawIcon(
-                    tab.icon,
-                    tabX + 11,
-                    tabY + 10,
-                    14,
-                    active and accent or Theme.sub,
-                    14,
-                    (active and 1 or (0.68 + 0.22 * hf)) * v
-                )
-                labelX = tabX + 31
+                drawIcon(tab.icon, navX + 13, navY + 10, 14, active and accent or Theme.sub, 14, (active and 1 or (0.7 + 0.2 * hf)) * v)
             end
             txt(
                 tab.name,
-                labelX,
-                textTop(tabY, tabH, 12),
+                navX + (tab.icon and 35 or 14),
+                textTop(navY, navH, 12),
                 active and WHITE or Theme.sub,
                 12,
                 active and FontBold or FontSystem,
                 14,
                 false,
                 false,
-                tabW - (labelX - tabX) - 10,
+                navW - (tab.icon and 45 or 24),
                 (active and 0.98 or (0.76 + 0.2 * hf)) * v
             )
+
             if click and hov then
                 if not active then
                     ProjectState.activeTab = tab
@@ -3912,19 +3977,73 @@ function ProjectState.drawNeverloseWindow(click, held, rightClick)
                 end
                 click = false
             end
-            tabX = tabX + tabW + 5
+            navY = navY + navH + 4
         end
     end
 
-    local searchX, searchY = x + w - 39, y + 13
-    local searchHov = noPopup and over(searchX, searchY, 24, 24)
-    rect(searchX, searchY, 24, 24, accent, 12, 6, (searchHov and 0.13 or 0) * v)
-    circ(searchX + 11, searchY + 10, 3.5, searchHov and accent or Theme.sub, 13, false, 1.4, 18, v)
-    thickBar(searchX + 13.5, searchY + 12.5, searchX + 17, searchY + 16, 1.4, searchHov and accent or Theme.sub, 13, v)
+    if ProjectState.settingsTab then
+        local settingsY = y + h - 76
+        local settingsX, settingsW, settingsH = x + 8, sidebarW - 16, 32
+        local settingsActive = ProjectState.activeTab == ProjectState.settingsTab
+        local settingsHov = noPopup and over(settingsX, settingsY, settingsW, settingsH)
+        local settingsA = approach(ProjectState._gearAf or 0, (settingsActive or settingsHov) and 1 or 0, 14)
+        ProjectState._gearAf = settingsA
+        rect(settingsX, settingsY, settingsW, settingsH, Theme.surface3, 12, 4, (settingsActive and 0.78 or 0.34 * settingsA) * v)
+        rect(settingsX, settingsY + 6, 2, settingsH - 12, accent, 14, 1, (settingsActive and 1 or 0) * v)
+        drawIcon(ProjectState.settingsIcon or "cog", settingsX + 13, settingsY + 9, 14, settingsActive and accent or Theme.sub, 14, v)
+        txt("Settings", settingsX + 35, textTop(settingsY, settingsH, 12), settingsActive and WHITE or Theme.sub, 12, settingsActive and FontBold or FontSystem, 14, false, false, settingsW - 45, (settingsActive and 0.98 or 0.78 + 0.18 * settingsA) * v)
+        if click and settingsHov then
+            if settingsActive then
+                ProjectState.activeTab = ProjectState._prevTab or ProjectState.tabs[1]
+                ProjectState.activeIndex = ProjectState._prevIndex or 1
+            else
+                ProjectState._prevTab = ProjectState.activeTab
+                ProjectState._prevIndex = ProjectState.activeIndex
+                ProjectState.activeTab = ProjectState.settingsTab
+                ProjectState.activeIndex = ProjectState.settingsIndex or #ProjectState.tabs
+            end
+            ProjectState.activeSub = nil
+            ProjectState.contentFade = 0
+            ProjectState.dropdown = nil
+            ProjectState.colorpicker = nil
+            ProjectState.featureSettings = nil
+            ProjectState.keyMenu = nil
+            ProjectState.focus = nil
+            click = false
+        end
+    end
+
+    lineD(x + 13, y + h - 38, x + sidebarW - 13, y + h - 38, Theme.border, 11, 1, 0.46 * v)
+    circ(x + 17, y + h - 20, 3, Theme.good, 12, true, 1, 14, v)
+    txt(
+        ProjectState.subtitle ~= "" and ProjectState.subtitle or "Ready",
+        x + 27,
+        textTop(y + h - 33, 26, 10),
+        Theme.sub,
+        10,
+        FontSystem,
+        12,
+        false,
+        false,
+        sidebarW - 40,
+        0.72 * v
+    )
+
+    local activeName = ProjectState.activeTab and ProjectState.activeTab.name or "Menu"
+    local activeCategory = ProjectState.activeTab and ProjectState.activeTab.category or "CELESTIAL"
+    txt(string.upper(activeCategory or "CELESTIAL"), x + sidebarW + 16, y + 13, Theme.sub, 9, FontBold, 13, false, false, 86, 0.54 * v)
+    txt(activeName, x + sidebarW + 16, y + 27, WHITE, 13, FontBold, 13, false, false, w - sidebarW - 74, AL.text * v)
+
+    local searchX, searchY = x + w - 42, y + 12
+    local searchHov = noPopup and over(searchX, searchY, 28, 28)
+    rect(searchX, searchY, 28, 28, Theme.surface3, 12, 5, (searchHov and 0.72 or 0.28) * v)
+    circ(searchX + 12, searchY + 12, 3.5, searchHov and accent or Theme.sub, 13, false, 1.4, 18, v)
+    thickBar(searchX + 14.5, searchY + 14.5, searchX + 18, searchY + 18, 1.4, searchHov and accent or Theme.sub, 13, v)
     if click and searchHov then
         ProjectState.spotlightOpen = true
         ProjectState.spotlight = { query = "", sel = 1 }
         ProjectState.focus = nil
+        ProjectState.controlFocus = nil
         click = false
     end
 
@@ -3935,38 +4054,6 @@ function ProjectState.drawNeverloseWindow(click, held, rightClick)
         }
         click = false
     end
-
-    rect(x + 1, y + h - footerH, w - 2, footerH - 1, Theme.sidebar, 10, 0, 0.88 * v)
-    lineD(x + 1, y + h - footerH, x + w - 1, y + h - footerH, Theme.border, 11, 1, 0.6 * v)
-    circ(x + 17, y + h - footerH / 2, 3, Theme.good, 12, true, 1, 14, v)
-    txt(
-        ProjectState.subtitle ~= "" and ProjectState.subtitle or "WORLD 3",
-        x + 27,
-        textTop(y + h - footerH, footerH, 10),
-        Theme.sub,
-        10,
-        FontSystem,
-        12,
-        false,
-        false,
-        160,
-        0.76 * v
-    )
-    local activeName = ProjectState.activeTab and ProjectState.activeTab.name or "Menu"
-    local activeW = textWidth(activeName, 10, FontSystem)
-    txt(
-        activeName,
-        x + w - activeW - 17,
-        textTop(y + h - footerH, footerH, 10),
-        Theme.sub,
-        10,
-        FontSystem,
-        12,
-        false,
-        false,
-        activeW + 2,
-        0.62 * v
-    )
 
     local resizeHov = noPopup and over(x + w - 18, y + h - 18, 20, 20)
     if click and resizeHov and not ProjectState.drag then
@@ -3980,10 +4067,10 @@ function ProjectState.drawNeverloseWindow(click, held, rightClick)
         click = false
     end
 
-    local contentX = x + 12
-    local contentY = y + headerH + 11
-    local contentW = w - 30
-    local contentH = h - headerH - footerH - 20
+    local contentX = x + sidebarW + 12
+    local contentY = y + headerH + 10
+    local contentW = w - sidebarW - 24
+    local contentH = h - headerH - 20
     ProjectState.contentFade = approach(ProjectState.contentFade, 1, 14)
     if ProjectState.contentFade > 0.997 then ProjectState.contentFade = 1 end
     if ProjectState.activeTab then
@@ -5212,6 +5299,13 @@ local function finalDestroy()
     ProjectState.open = false
     ProjectState.dropdown = nil; ProjectState.colorpicker = nil; ProjectState.focus = nil
     pcall(setrobloxinput, true); ProjectState.inputState = true
+    if ProjectState.menuInputConnection then
+        pcall(function()
+            ProjectState.menuInputConnection:Disconnect()
+        end)
+        ProjectState.menuInputConnection = nil
+    end
+    ProjectState.userInputService = nil
     removeAllDrawings()
     local function removeImage(owner, imageKey, cacheKey)
         local image = owner and owner[imageKey]
@@ -5262,6 +5356,130 @@ local function anyListening()
     if ProjectState.colorpicker and ProjectState.colorpicker.hexInput then return true end
     for _, it in ipairs(keybindItems) do if it.keybind and it.keybind.listening then return true end end
     return false
+end
+
+ProjectState.processControlNavigation = function()
+    if not ProjectState.open
+        or ProjectState.minimized
+        or ProjectState.spotlightOpen
+        or ProjectState.dialog
+        or ProjectState.featureSettings
+        or ProjectState.keyMenu
+        or ProjectState.dropdown
+        or ProjectState.colorpicker
+        or anyListening()
+    then
+        return
+    end
+
+    local view = ProjectState.activeSub or ProjectState.activeTab
+    if not view then ProjectState.controlFocus = nil; return end
+    local items = {}
+    for _, section in ipairs(view.sections or {}) do
+        if not section.collapsed then
+            for _, item in ipairs(section.items or {}) do
+                local kind = item.type
+                if not isItemDisabled(item)
+                    and (kind == "button"
+                        or kind == "checkbox"
+                        or kind == "slider"
+                        or kind == "rangeslider"
+                        or kind == "dropdown"
+                        or kind == "textbox"
+                        or kind == "keybind"
+                        or kind == "colorpicker")
+                then
+                    items[#items + 1] = item
+                end
+            end
+        end
+    end
+
+    if Input.tab.click then
+        if ProjectState.focus then ProjectState.focus = nil end
+        local current = 0
+        for i, item in ipairs(items) do
+            if item == ProjectState.controlFocus then current = i; break end
+        end
+        local direction = shiftHeld() and -1 or 1
+        if #items > 0 then
+            current = current + direction
+            if current < 1 then current = #items elseif current > #items then current = 1 end
+            ProjectState.controlFocus = items[current]
+            ProjectState.controlFocusPart = 1
+            ProjectState._spotScrollTo = items[current]
+        else
+            ProjectState.controlFocus = nil
+        end
+        Input.tab.click = false
+        return
+    end
+
+    local item = ProjectState.controlFocus
+    if not item then return end
+    local available = false
+    for _, candidate in ipairs(items) do if candidate == item then available = true; break end end
+    if not available then ProjectState.controlFocus = nil; return end
+
+    local activate = Input.enter.click
+        or (Input.space.click and not ctrlHeld())
+    if item.type == "button" then
+        local buttons = item.buttons or {}
+        if #buttons > 1 then
+            local part = clamp(ProjectState.controlFocusPart or 1, 1, #buttons)
+            if Input.left.click then part = max(1, part - 1); Input.left.click = false end
+            if Input.right.click then part = min(#buttons, part + 1); Input.right.click = false end
+            ProjectState.controlFocusPart = part
+        end
+        if activate then
+            local button = buttons[ProjectState.controlFocusPart or 1] or buttons[1]
+            if button then invoke(button.callback) end
+        end
+    elseif item.type == "checkbox" then
+        if activate then setItemValue(item, not item.value, true) end
+    elseif item.type == "slider" then
+        if Input.left.click or Input.down.click then
+            setItemValue(item, item.value - (item.step or 1), true)
+            Input.left.click = false; Input.down.click = false
+        elseif Input.right.click or Input.up.click then
+            setItemValue(item, item.value + (item.step or 1), true)
+            Input.right.click = false; Input.up.click = false
+        elseif Input.enter.click then
+            item.directValue = tostring(item.value)
+            item.caret = #item.directValue
+            item.selA = nil
+            ProjectState.focus = item
+        end
+    elseif item.type == "dropdown" then
+        if not item.multi and #item.choices > 0
+            and (Input.left.click or Input.up.click or Input.right.click or Input.down.click)
+        then
+            local index = 1
+            for i, choice in ipairs(item.choices) do if choice == item.value[1] then index = i; break end end
+            if Input.left.click or Input.up.click then index = max(1, index - 1)
+            else index = min(#item.choices, index + 1) end
+            setDropdownValue(item, { item.choices[index] }, true)
+            Input.left.click = false; Input.up.click = false
+            Input.right.click = false; Input.down.click = false
+        elseif Input.enter.click and item._keyboardBox then
+            local box = item._keyboardBox
+            dDropdown(box.x, box.y + box.h + 2, box.w, item, box.x, box.y, box.w, box.h)
+        end
+    elseif item.type == "textbox" and Input.enter.click then
+        ProjectState.focus = item
+        item.caret = #(item.value or "")
+        item.selA = nil
+    elseif item.type == "keybind" and Input.enter.click then
+        item.listening = true
+        ProjectState.kbCapture = item
+    elseif item.type == "colorpicker" and Input.enter.click then
+        doColorPicker(ProjectState.mouseX + 12, ProjectState.mouseY - 80, item)
+    end
+
+    if activate then
+        Input.enter.click = false
+        Input.space.click = false
+    end
 end
 
 local function updateRainbow()
@@ -5326,6 +5544,18 @@ local function step()
 
     getMouse()
     updateInput()
+    if ProjectState.debugControlKey then
+        local debugInput = Input[ProjectState.debugControlKey]
+        ProjectState.debugControlKey = nil
+        if debugInput then debugInput.click = true end
+    end
+    if ProjectState.menuTogglePending then
+        ProjectState.menuTogglePending = false
+        local configured = Input[menuKey]
+        if configured then
+            configured.click = true
+        end
+    end
 
     ProjectState.drawVisible = approach(ProjectState.drawVisible, ProjectState.open and 1 or 0, 12)
     if ProjectState.drawVisible > 0.997 then ProjectState.drawVisible = 1 elseif ProjectState.drawVisible < 0.003 then ProjectState.drawVisible = 0 end
@@ -5348,6 +5578,7 @@ local function step()
     processTextInput()
     if not ProjectState.spotlightOpen then processKeybinds() end
     ProjectState._captureKeybind()
+    ProjectState.processControlNavigation()
     updateRainbow()
     ProjectState._accentMid = lerpColor(Theme.accentA, Theme.accentB, 0.5)
     if ProjectState._rebuildIcons then
@@ -5365,16 +5596,16 @@ local function step()
         end
     end
 
-    if ProjectState.open and not ProjectState.spotlightOpen and not ProjectState.focus and not ProjectState.dropdown and not ProjectState.colorpicker and #ProjectState.tabs > 0 then
+    if ProjectState.open and not ProjectState.spotlightOpen and not ProjectState.focus and not ProjectState.controlFocus and not ProjectState.dropdown and not ProjectState.colorpicker and #ProjectState.tabs > 0 then
         if Input.left.click then
             local i = ProjectState.activeIndex
             repeat i = i - 1 until i < 1 or not ProjectState.tabs[i].hidden
-            if i >= 1 then ProjectState.activeIndex = i; ProjectState.activeTab = ProjectState.tabs[i]; ProjectState.contentFade = 0 end
+            if i >= 1 then ProjectState.activeIndex = i; ProjectState.activeTab = ProjectState.tabs[i]; ProjectState.activeSub = nil; ProjectState.controlFocus = nil; ProjectState.contentFade = 0 end
         end
         if Input.right.click then
             local i = ProjectState.activeIndex
             repeat i = i + 1 until i > #ProjectState.tabs or not ProjectState.tabs[i].hidden
-            if i <= #ProjectState.tabs then ProjectState.activeIndex = i; ProjectState.activeTab = ProjectState.tabs[i]; ProjectState.contentFade = 0 end
+            if i <= #ProjectState.tabs then ProjectState.activeIndex = i; ProjectState.activeTab = ProjectState.tabs[i]; ProjectState.activeSub = nil; ProjectState.controlFocus = nil; ProjectState.contentFade = 0 end
         end
     end
 
@@ -5579,7 +5810,8 @@ local function buildSettingsTab(win, icon)
     end)
     th:Slider("Rainbow speed", 30, 1, 5, 200, "%", function(v) ProjectState.rainbowSpeed = v / 100 end)
 
-    local apr = tab:Section("Appearance", "Left")
+    local apr = tab:Section("Advanced Appearance", "Left")
+    apr._section.collapsed = true
     apr:Colorpicker("Background", Theme.bg, function(c) Theme.bg = c; Theme.sidebar = c end, 1)
     apr:Colorpicker("Text color", Theme.text, function(c) Theme.text = c end, 1)
     apr:Slider("Card glow", 100, 5, 0, 200, "%", function(v) ProjectState.glowMul = v / 100 end, "strength of the accent glow when you hover a section card")

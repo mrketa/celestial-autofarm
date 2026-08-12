@@ -3,7 +3,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local WORLD3_PLACE_ID = 93411036959889
 local UINT32_RANGE = 4294967296
-local MOTION_TICK = 1 / 30
+local MOTION_TICK = 0.1
 local STAGE7_HAZARD = {
     bossSpeed = 400,
     tsunamiSpeed = 300,
@@ -628,108 +628,39 @@ local function tweenWorld3(target, forceRun, token, dwell, speed)
     local duration = distance / math.max(movementSpeed, 1)
     local startedAt = tick()
     local lastCommanded = startPosition
-    if world3.route == "Stage 7" and duration > 0 then
-        local movementDone = false
-        local movementError = nil
-        local runService = game:GetService("RunService")
-        local connection
-        local lastHeartbeatAt = tick()
-
-        local function advanceMovement()
-            if movementDone or movementError then
-                return
-            end
-
-            if not world3MayContinue(forceRun, token) then
-                stopPart(root)
-                movementError = "Stopped"
-                return
-            end
-
-            root = getRoot()
-
-            if not root then
-                movementError = "Character was replaced"
-                return
-            end
-
-            local actual = root.Position
-            if (actual - lastCommanded).Magnitude > 12 then
-                reportTpCorrection(
-                    "during_tween",
-                    actual,
-                    lastCommanded,
-                    target,
-                    movementSpeed
-                )
-                stopPart(root)
-                movementError = "Movement was corrected"
-                return
-            end
-
-            local alpha = math.min((tick() - startedAt) / duration, 1)
-            local position = startPosition:Lerp(target, alpha)
-
+    while tick() - startedAt < duration do
+        if not world3MayContinue(forceRun, token) then
             stopPart(root)
-            root.CFrame = CFrame.new(position.X, position.Y, position.Z)
-            rememberTpCommand(target, position, movementSpeed)
-            lastCommanded = position
-            movementDone = alpha >= 1
+            return false, "Stopped"
         end
 
-        connection = runService.Heartbeat:Connect(function()
-            lastHeartbeatAt = tick()
-            advanceMovement()
-        end)
+        root = getRoot()
 
-        while not movementDone and not movementError do
-            task.wait(POLL_TICK)
-
-            if tick() - lastHeartbeatAt > 0.1 then
-                advanceMovement()
-            end
+        if not root then
+            return false, "Character was replaced"
         end
 
-        connection:Disconnect()
-
-        if movementError then
-            return false, movementError
-        end
-    else
-        while tick() - startedAt < duration do
-            if not world3MayContinue(forceRun, token) then
-                stopPart(root)
-                return false, "Stopped"
-            end
-
-            root = getRoot()
-
-            if not root then
-                return false, "Character was replaced"
-            end
-
-            local actual = root.Position
-            if (actual - lastCommanded).Magnitude > 12 then
-                reportTpCorrection(
-                    "during_tween",
-                    actual,
-                    lastCommanded,
-                    target,
-                    movementSpeed
-                )
-                stopPart(root)
-                return false, "Movement was corrected"
-            end
-
-            local alpha = math.min((tick() - startedAt) / duration, 1)
-            local position = startPosition:Lerp(target, alpha)
-
+        local actual = root.Position
+        if (actual - lastCommanded).Magnitude > 12 then
+            reportTpCorrection(
+                "during_tween",
+                actual,
+                lastCommanded,
+                target,
+                movementSpeed
+            )
             stopPart(root)
-            root.CFrame = CFrame.new(position.X, position.Y, position.Z)
-            rememberTpCommand(target, position, movementSpeed)
-            lastCommanded = position
-            task.wait(MOTION_TICK)
+            return false, "Movement was corrected"
         end
+
+        local alpha = math.min((tick() - startedAt) / duration, 1)
+        local position = startPosition:Lerp(target, alpha)
+
+        stopPart(root)
+        root.CFrame = CFrame.new(position.X, position.Y, position.Z)
+        rememberTpCommand(target, position, movementSpeed)
+        lastCommanded = position
+        task.wait(MOTION_TICK)
     end
 
     root = getRoot()
@@ -1037,6 +968,7 @@ local function runWorld3Stage1Cycle(forceRun, token)
 
     world3.status = "Holding inside WinBlock32"
     world3.point = "WinBlock32 Hold"
+    local nextHoldCorrectionAt = 0
 
     local holdConnection = RunService.RenderStepped:Connect(function()
         if not world3MayContinue(forceRun, token) then
@@ -1044,9 +976,12 @@ local function runWorld3Stage1Cycle(forceRun, token)
         end
 
         local liveRoot = getRoot()
+        local now = tick()
         if liveRoot
+            and now >= nextHoldCorrectionAt
             and (liveRoot.Position - holdPosition).Magnitude > 2
         then
+            nextHoldCorrectionAt = now + 0.1
             stopPart(liveRoot)
             liveRoot.CFrame = holdCFrame
             stopPart(liveRoot)
@@ -1321,16 +1256,30 @@ local events = {
         summer = false,
         battle = false,
         disco = false,
-        masked = false
+        soccer = false,
+        rings = false,
+        masked = false,
+        overdrive = false,
     },
-    retry = { summer = 2, battle = 2, disco = 2, masked = 2 },
+    retry = {
+        summer = 2,
+        battle = 2,
+        disco = 2,
+        soccer = 2,
+        rings = 2,
+        masked = 2,
+        overdrive = 2,
+    },
     retryAt = {},
     maskedRetryAt = {},
     counts = {
         summer = 0,
         battle = 0,
         disco = 0,
+        soccer = 0,
+        rings = 0,
         masked = 0,
+        overdrive = 0,
         total = 0
     },
     status = "Ready",
@@ -1363,6 +1312,24 @@ function events.retryKey(kind, model)
     return kind
         .. ":"
         .. tostring((model and model.Address) or (model and model.Name))
+end
+
+function events.ringMultiplier(model)
+    local root = model and model:FindFirstChild("Root")
+    local billboard = root and root:FindFirstChild("BillboardGui")
+    local top = billboard and billboard:FindFirstChild("Top")
+    local label = top and top:FindFirstChild("TextLabel")
+    local text = label and label.Text
+    if type(text) ~= "string" then
+        return 0
+    end
+
+    text = string.upper(string.gsub(text, "%s+", " "))
+    if text == "WINS" then
+        return 1
+    end
+
+    return tonumber(string.match(text, "^X(%d+) WINS$")) or 0
 end
 
 
@@ -1399,7 +1366,10 @@ local function anyEventEnabled()
     return events.enabled.summer
         or events.enabled.battle
         or events.enabled.disco
+        or events.enabled.soccer
+        or events.enabled.rings
         or events.enabled.masked
+        or events.enabled.overdrive
 end
 
 local function recordEventTeleport(kind, origin, destination)
@@ -1450,7 +1420,10 @@ local function stopEventsForRewardRisk(message)
     events.enabled.summer = false
     events.enabled.battle = false
     events.enabled.disco = false
+    events.enabled.soccer = false
+    events.enabled.rings = false
     events.enabled.masked = false
+    events.enabled.overdrive = false
     events.runToken = events.runToken + 1
     events.running = false
     events.status = message
@@ -1931,6 +1904,36 @@ local function eventConfirmed(model, kind, target)
             and wins ~= target.winsBefore
     end
 
+    if kind == "overdrive" then
+        local cashValue = getWorld3Wins()
+        local wins = cashValue and cashValue.Value
+        return wins ~= nil
+            and target
+            and target.winsBefore ~= nil
+            and wins ~= target.winsBefore
+    end
+
+    if kind == "rings" then
+        local cashValue = getWorld3Wins()
+        local wins = cashValue and cashValue.Value
+        return wins ~= nil
+            and target
+            and target.winsBefore ~= nil
+            and wins ~= target.winsBefore
+    end
+
+    if kind == "soccer" then
+        if not model.Parent then
+            return true
+        end
+
+        local part = target and target.part
+        local ok, transparency = pcall(function()
+            return part and part.Transparency
+        end)
+        return ok and transparency ~= nil and transparency >= 1
+    end
+
     if not model.Parent then
         return true
     end
@@ -2106,6 +2109,86 @@ local function findNearestEventTarget()
         end
     end
 
+    if events.enabled.soccer then
+        for _, object in ipairs(workspace:GetChildren()) do
+            if object.Name == "SoccerBall" and isEventBasePart(object) then
+                consider("soccer", object, object)
+            end
+        end
+    end
+
+    if events.enabled.overdrive then
+        for _, object in ipairs(workspace:GetChildren()) do
+            if object.Name == "TixCollectibleOrb"
+                and object.ClassName == "Model"
+            then
+                local part = object.PrimaryPart
+                    or object:FindFirstChild("CollectibleOrb")
+
+                consider("overdrive", object, part)
+            end
+        end
+    end
+
+    if events.enabled.rings then
+        local bestModel
+        local bestPart
+        local bestMultiplier = 0
+        local bestRadius = 0
+        local bestDistance = math.huge
+
+        for _, object in ipairs(workspace:GetChildren()) do
+            if object.Name == "WinRing"
+                and object.ClassName == "Model"
+            then
+                local part = object:FindFirstChild("Root")
+                    or object:FindFirstChild("Cylinder")
+                local multiplier = events.ringMultiplier(object)
+                local retryKey = events.retryKey("rings", object)
+                local retryAt = events.retryAt[retryKey]
+
+                if retryAt and retryAt <= now then
+                    events.retryAt[retryKey] = nil
+                    retryAt = nil
+                end
+
+                if multiplier > 0
+                    and isEventBasePart(part)
+                    and (retryAt or 0) <= now
+                then
+                    local distance = (part.Position - rootPosition).Magnitude
+                    if multiplier > bestMultiplier
+                        or (
+                            multiplier == bestMultiplier
+                            and distance < bestDistance
+                        )
+                    then
+                        local cylinder = object:FindFirstChild("Cylinder")
+                        bestModel = object
+                        bestPart = part
+                        bestMultiplier = multiplier
+                        bestRadius = isEventBasePart(cylinder)
+                                and math.max(
+                                    cylinder.Size.X,
+                                    cylinder.Size.Z
+                                ) / 2
+                            or 10
+                        bestDistance = distance
+                    end
+                end
+            end
+        end
+
+        if bestModel then
+            consider("rings", bestModel, bestPart, {
+                type = "ring",
+                key = tostring(bestModel.Address),
+                multiplier = bestMultiplier,
+                radius = bestRadius
+            })
+        end
+    end
+
     if events.enabled.masked then
         local adminAbuse = workspace:FindFirstChild("AdminAbuse")
         local mapFolder = adminAbuse and adminAbuse:FindFirstChild("Map")
@@ -2266,12 +2349,20 @@ local function collectEventTarget(target, token)
     events.current = target.kind == "summer" and "Summer Coin"
         or target.kind == "battle" and "Coin Battle"
         or target.kind == "disco" and "Disco Keycap"
+        or target.kind == "soccer" and "World Cup Soccer Ball"
+        or target.kind == "overdrive" and "Overdrive Tix Orb"
+        or target.kind == "rings"
+            and string.format(
+                "Summer Boss x%d Win Ring",
+                target.id.multiplier
+            )
         or target.id and target.id.type == "pad"
             and "Masked Man Win Pad"
         or "Masked Man Orb"
     local origin = root.Position
     local targetOffset = target.kind == "masked"
             and Vector3.new(0, 1.5, 0)
+        or target.kind == "overdrive" and Vector3.zero
         or Vector3.new(0, 3, 0)
     local destination = target.part.Position + targetOffset
     local travelDistance = (destination - origin).Magnitude
@@ -2300,23 +2391,43 @@ local function collectEventTarget(target, token)
     events.atHome = false
     events.travelKind = target.kind
     events.status = "Collecting " .. events.current
-    if target.kind == "masked"
-        and target.id
-        and target.id.type == "pad"
+    if target.kind == "rings"
+        or target.kind == "overdrive"
+        or (
+            target.kind == "masked"
+            and target.id
+            and target.id.type == "pad"
+        )
     then
         local cashValue = getWorld3Wins()
         target.winsBefore = cashValue and cashValue.Value
     end
 
-    local moved = moveEventSafely(
-        target.kind,
-        origin,
-        destination,
-        token,
-        false,
-        target.part,
-        targetOffset
-    )
+    local moved
+    if target.kind == "overdrive" then
+        moved = true
+    elseif target.kind == "rings" then
+        local delta = target.part.Position - root.Position
+        local horizontalDistance = Vector3.new(
+            delta.X,
+            0,
+            delta.Z
+        ).Magnitude
+        moved = horizontalDistance
+            <= math.max(target.id.radius * 0.8, 4)
+    end
+
+    if not moved then
+        moved = moveEventSafely(
+            target.kind,
+            origin,
+            destination,
+            token,
+            false,
+            target.part,
+            targetOffset
+        )
+    end
 
     if not moved then
         return false
@@ -2337,7 +2448,17 @@ local function collectEventTarget(target, token)
     end
 
 
-    local deadline = tick() + 1
+    local deadline = tick()
+        + (
+            target.kind == "rings" and 12
+            or target.kind == "overdrive"
+                and math.min(
+                    math.max(travelDistance / 12 + 4, 8),
+                    55
+                )
+            or target.kind == "soccer" and 3
+            or 1
+        )
 
     while tick() < deadline
         and generation == _G.CelestialFarmGeneration
@@ -2360,7 +2481,72 @@ local function collectEventTarget(target, token)
                         and " touched"
                     or " confirmed")
             events.maskedScanAt = 0
+            if target.kind == "rings"
+                or target.kind == "overdrive"
+            then
+                stopRoot()
+            end
             return true
+        end
+
+        if target.kind == "rings"
+            and tick() >= (target.nextChaseAt or 0)
+        then
+            target.nextChaseAt = tick() + 0.2
+            root = getRoot()
+            local part = target.part
+            if root and part and part.Parent then
+                local delta = part.Position - root.Position
+                local horizontal = Vector3.new(delta.X, 0, delta.Z)
+                local velocity = root.AssemblyLinearVelocity
+                local desiredX = 0
+                local desiredZ = 0
+                if horizontal.Magnitude
+                    > math.max(target.id.radius * 0.45, 4)
+                then
+                    local speed = math.min(
+                        math.max(horizontal.Magnitude * 2, 20),
+                        70
+                    )
+                    local direction = horizontal.Unit
+                    desiredX = direction.X * speed
+                    desiredZ = direction.Z * speed
+                end
+
+                local velocityDelta = Vector3.new(
+                    velocity.X - desiredX,
+                    0,
+                    velocity.Z - desiredZ
+                ).Magnitude
+                if velocityDelta > 5 then
+                    root.AssemblyLinearVelocity = Vector3.new(
+                        desiredX,
+                        velocity.Y,
+                        desiredZ
+                    )
+                end
+            end
+        end
+
+        if target.kind == "overdrive"
+            and tick() >= (target.nextMoveAt or 0)
+        then
+            target.nextMoveAt = tick() + 0.2
+            root = getRoot()
+            local part = target.part
+            if root and part and part.Parent then
+                local delta = part.Position - root.Position
+                local horizontal = Vector3.new(delta.X, 0, delta.Z)
+                if horizontal.Magnitude > 2 then
+                    local step = math.min(horizontal.Magnitude, 3.2)
+                    local nextPosition = root.Position
+                        + horizontal.Unit * step
+                    root.CFrame = CFrame.lookAt(
+                        nextPosition,
+                        nextPosition + root.CFrame.LookVector
+                    )
+                end
+            end
         end
 
         task.wait(POLL_TICK)
@@ -2386,7 +2572,23 @@ local function collectEventTarget(target, token)
                     and " touched"
                 or " confirmed")
         events.maskedScanAt = 0
+        if target.kind == "rings"
+            or target.kind == "overdrive"
+        then
+            stopRoot()
+        end
         return true
+    end
+
+    if target.kind == "rings" then
+        stopRoot()
+    end
+
+    if target.kind == "overdrive" then
+        stopRoot()
+        if not target.model.Parent then
+            events.status = "Overdrive Tix reward not confirmed"
+        end
     end
 
     if target.model.Parent
@@ -2438,7 +2640,10 @@ local function runEventStep()
             and events.summerOnlyStorm
             and not events.enabled.battle
             and not events.enabled.disco
+            and not events.enabled.rings
             and not events.enabled.masked
+            and not events.enabled.soccer
+            and not events.enabled.overdrive
         then
             if summerStormIsActive == nil then
                 summerStormIsActive = summerStormActive()
@@ -2446,6 +2651,8 @@ local function runEventStep()
             events.status = summerStormIsActive
                 and "Waiting for event targets"
                 or "Waiting for Coin Storm"
+        elseif events.enabled.rings then
+            events.status = "Waiting for Summer Boss Win Rings"
         elseif events.enabled.masked and not events.maskedActive then
             events.status = "Waiting for Masked Man event"
         elseif events.enabled.masked then
@@ -2460,7 +2667,10 @@ local function runEventStep()
         events.enabled.summer = false
         events.enabled.battle = false
         events.enabled.disco = false
+        events.enabled.soccer = false
+        events.enabled.rings = false
         events.enabled.masked = false
+        events.enabled.overdrive = false
         world3.eventsActive = false
         events.running = false
         events.status = "Error: " .. cleanError(failure)
@@ -2507,7 +2717,10 @@ local function stopEvents()
     events.enabled.summer = false
     events.enabled.battle = false
     events.enabled.disco = false
+    events.enabled.soccer = false
+    events.enabled.rings = false
     events.enabled.masked = false
+    events.enabled.overdrive = false
     world3.eventsActive = false
     events.runToken = events.runToken + 1
     events.running = false
@@ -2696,13 +2909,13 @@ world3AutoHandle:AddSettings({
 
 world3Control:Button("Run", function()
     runWorld3(true)
-end):AddButton("Stop", function()
+end):SetStyle("primary"):AddButton("Stop", function()
     stopWorld3()
 
     if world3AutoHandle:Get() then
         world3AutoHandle:Set(false)
     end
-end)
+end, "danger")
 
 world3Live:Label(function()
     return "Status: " .. world3.status
@@ -2808,6 +3021,72 @@ eventHandles.disco:AddSettings({
     }
 })
 
+eventHandles.soccer = eventsControl:Toggle(
+    "World Cup Soccer Balls",
+    false,
+    function(enabled)
+        setEventEnabled("soccer", enabled)
+    end
+)
+eventHandles.soccer:AddSettings({
+    {
+        type = "slider",
+        label = "Retry after",
+        value = 2,
+        min = 0.5,
+        max = 10,
+        step = 0.5,
+        suffix = "s",
+        callback = function(value)
+            events.retry.soccer = value
+        end
+    }
+})
+
+eventHandles.rings = eventsControl:Toggle(
+    "Summer Boss Win Rings",
+    false,
+    function(enabled)
+        setEventEnabled("rings", enabled)
+    end
+)
+eventHandles.rings:AddSettings({
+    {
+        type = "slider",
+        label = "Retry after",
+        value = 2,
+        min = 0.5,
+        max = 10,
+        step = 0.5,
+        suffix = "s",
+        callback = function(value)
+            events.retry.rings = value
+        end
+    }
+})
+
+eventHandles.overdrive = eventsControl:Toggle(
+    "Overdrive Tix Orbs",
+    false,
+    function(enabled)
+        setEventEnabled("overdrive", enabled)
+    end
+)
+eventHandles.overdrive:AddSettings({
+    {
+        type = "slider",
+        label = "Retry after",
+        value = 2,
+        min = 0.5,
+        max = 10,
+        step = 0.5,
+        suffix = "s",
+        callback = function(value)
+            events.retry.overdrive = value
+        end
+    }
+})
+
 eventHandles.masked = eventsControl:Toggle(
     "Masked Man Color Mania",
     false,
@@ -2832,29 +3111,43 @@ eventHandles.masked:AddSettings({
 
 eventsControl:Button("Stop All", function()
     stopEvents()
-end)
+end):SetStyle("danger")
 
 eventsLive:Label(function()
-    return "Status: " .. events.status
+    local status = events.status
+    local line = (anyEventEnabled() and "Active" or "Idle")
+        .. " · "
+        .. status
+    if events.current ~= "-"
+        and not string.find(status, events.current, 1, true)
+    then
+        line = line .. " · " .. events.current
+    end
+    return line
 end)
 eventsLive:Label(function()
-    return "Target: " .. events.current
+    local active = {}
+    if events.enabled.summer then active[#active + 1] = "Summer" end
+    if events.enabled.battle then active[#active + 1] = "Battle" end
+    if events.enabled.disco then active[#active + 1] = "Disco" end
+    if events.enabled.soccer then active[#active + 1] = "Soccer" end
+    if events.enabled.rings then active[#active + 1] = "Rings" end
+    if events.enabled.overdrive then active[#active + 1] = "Overdrive" end
+    if events.enabled.masked then active[#active + 1] = "Masked" end
+    return "Active: " .. (#active > 0 and table.concat(active, " · ") or "None")
 end)
 eventsLive:Label(function()
-    return "Summer Coins: " .. tostring(events.counts.summer)
-end)
-eventsLive:Label(function()
-    return "Coin Battle: " .. tostring(events.counts.battle)
-end)
-eventsLive:Label(function()
-    return "Disco Keycaps: " .. tostring(events.counts.disco)
-end)
-eventsLive:Label(function()
-    return "Masked touches/rewards: "
-        .. tostring(events.counts.masked)
-end)
-eventsLive:Label(function()
-    return "Total: " .. tostring(events.counts.total)
+    local collected = {}
+    local counts = events.counts
+    if counts.summer > 0 then collected[#collected + 1] = "Summer " .. counts.summer end
+    if counts.battle > 0 then collected[#collected + 1] = "Battle " .. counts.battle end
+    if counts.disco > 0 then collected[#collected + 1] = "Disco " .. counts.disco end
+    if counts.soccer > 0 then collected[#collected + 1] = "Soccer " .. counts.soccer end
+    if counts.rings > 0 then collected[#collected + 1] = "Rings " .. counts.rings end
+    if counts.overdrive > 0 then collected[#collected + 1] = "Overdrive " .. counts.overdrive end
+    if counts.masked > 0 then collected[#collected + 1] = "Masked " .. counts.masked end
+    local detail = #collected > 0 and table.concat(collected, " · ") or "None yet"
+    return "Collected: " .. detail .. " · Total " .. counts.total
 end)
 
 local hudBox = Lib:CreateBox({
@@ -2931,10 +3224,39 @@ hudSettings:Label(
 )
 
 window:autoloadConfig("orbit")
+
+if world3AutoHandle:Get() then
+    world3AutoHandle:Set(false)
+else
+    world3.auto = false
+end
+
+for kind, handle in pairs(eventHandles) do
+    if handle:Get() then
+        handle:Set(false)
+    else
+        events.enabled[kind] = false
+    end
+end
+
+world3.eventsActive = false
+events.running = false
+events.returnPending = false
+events.status = "Ready"
 Lib:SetPerformance(false)
+local uiPerformanceMode = false
 
 task.spawn(function()
     while generation == _G.CelestialFarmGeneration do
+        local shouldUsePerformance = world3.running
+            or world3.auto
+            or world3.eventsActive
+            or anyEventEnabled()
+        if shouldUsePerformance ~= uiPerformanceMode then
+            uiPerformanceMode = shouldUsePerformance
+            Lib:SetPerformance(uiPerformanceMode)
+        end
+
         if world3AutoHandle:Get() ~= world3.auto then
             world3AutoHandle:Set(world3.auto)
         end
